@@ -20,6 +20,11 @@
 ** IN THE SOFTWARE.
 */
 
+/*
+ * NOTE: This MicroUI is modified in a way that's beneficial for me.
+ *  - fuzzy soy-chilli (komugi1211s)
+ * */
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
