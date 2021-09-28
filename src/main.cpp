@@ -1,7 +1,36 @@
-#include "vendor/microui.c"
-#include "template_sdl_microui_opengl3.c"
+#include <stdio.h>
+#include <assert.h>
+#include <stdint.h>
+#include <string.h>
 
-typedef struct Process_Handle Process_Handle;
+#ifdef _WIN32 
+#include <SDL.h>
+#include <SDL_opengl.h>
+#else
+#include <SDL2/SDL.h>
+#include <SDL2/SDL_opengl.h>
+#endif
+
+extern "C" {
+    #include "vendor/microui.h"
+
+    void r_init(void);
+    void r_draw_rect(mu_Rect rect, mu_Color color);
+    void r_draw_text(const char *text, mu_Vec2 pos, mu_Color color);
+    void r_draw_icon(int id, mu_Rect rect, mu_Color color);
+    int r_get_text_width(const char *text, int len);
+    int r_get_text_height(void);
+    void r_set_clip_rect(mu_Rect rect);
+    void r_clear(mu_Color color);
+    void r_present(void);
+}
+
+struct Process_Handle;
+Process_Handle create_handle_from_command(const char *command_as_chars);
+
+void run_process(Process_Handle *handle);
+void restart_process(Process_Handle *handle);
+uint64_t find_latest_modified_time(char *path);
 
 #if _WIN32
 #include <windows.h>
@@ -88,7 +117,6 @@ void restart_process(Process_Handle *handle) {
     run_process(handle);
 }
 
-uint64_t find_latest_modified_time(char *path);
 
 #define ModTime(mStatus) ((uint64_t)((mStatus).st_mtim.tv_sec * 1000000000llu + (mStatus).st_mtim.tv_nsec))
 uint64_t find_latest_modified_time(char *path) {
@@ -159,6 +187,32 @@ struct Succotash {
     size_t command_pair_count;
 };
 
+char sdlk_to_microui_key(SDL_Keycode sym) {
+    switch(sym) {
+        case SDLK_LSHIFT:
+        case SDLK_RSHIFT:
+            return MU_KEY_SHIFT;
+
+        case SDLK_LCTRL:
+        case SDLK_RCTRL:
+            return MU_KEY_CTRL;
+
+        case SDLK_LALT:
+        case SDLK_RALT:
+            return MU_KEY_ALT;
+
+        case SDLK_RETURN:
+            return MU_KEY_RETURN;
+
+        case SDLK_BACKSPACE:
+            return MU_KEY_BACKSPACE;
+
+        default:
+            return 0;
+    }
+}
+
+
 void process_event(Succotash *succotash, mu_Context *ctx) {
     /* handle SDL events */
     SDL_Event e;
@@ -184,7 +238,17 @@ void process_event(Succotash *succotash, mu_Context *ctx) {
             case SDL_MOUSEBUTTONDOWN:
             case SDL_MOUSEBUTTONUP:
             {
-                int b = button_map[e.button.button & 0xff];
+                int b;
+                switch(e.button.button) {
+                    case SDL_BUTTON_LEFT:
+                        b = MU_MOUSE_LEFT; break;
+                    case SDL_BUTTON_RIGHT:
+                        b = MU_MOUSE_RIGHT; break;
+                    case SDL_BUTTON_MIDDLE:
+                        b = MU_MOUSE_MIDDLE; break;
+                    default:
+                        assert(false && "unsupported mouse");
+                }
                 if (b && e.type == SDL_MOUSEBUTTONDOWN) { mu_input_mousedown(ctx, e.button.x, e.button.y, b); }
                 if (b && e.type ==   SDL_MOUSEBUTTONUP) { mu_input_mouseup(ctx, e.button.x, e.button.y, b);   }
             } break;
@@ -192,7 +256,7 @@ void process_event(Succotash *succotash, mu_Context *ctx) {
             case SDL_KEYDOWN:
             case SDL_KEYUP:
             {
-                int c = key_map[e.key.keysym.sym & 0xff];
+                int c = sdlk_to_microui_key(e.key.keysym.sym);
                 if (c && e.type == SDL_KEYDOWN) { mu_input_keydown(ctx, c); }
                 if (c && e.type ==   SDL_KEYUP) { mu_input_keyup(ctx, c);   }
             } break;
@@ -246,7 +310,7 @@ void process_gui(Succotash *succotash, mu_Context *ctx) {
 }
 
 void render_gui(Succotash *succotash, mu_Context *ctx) {
-    r_clear(mu_color(bg[0], bg[1], bg[2], 255));
+    r_clear(mu_color(0, 0, 0, 255));
     mu_Command *cmd = NULL;
     while (mu_next_command(ctx, &cmd)) {
         switch (cmd->type) {
@@ -278,15 +342,67 @@ int main(int argc, char **argv) {
 
     /* main loop */
 
-    char *directory = "./src";
-    char *command = "notify-send \"Hello here from commands!\"";
+    const char *directory = "./src";
+    const char *command = "notify-send \"File reloaded, running commands now!\"";
 
     Process_Handle handle               = create_handle_from_command(command);
-    uint64_t       latest_modified_time = find_latest_modified_time(directory);
+    uint64_t       latest_modified_time = find_latest_modified_time((char *)directory);
+
+    char *logs = (char *)malloc(sizeof(char) * 4096);
+    memset(logs, 0, sizeof(char) * 4096);
+
+    size_t logs_count = 0;
+    size_t logs_capacity = 4096;
 
     run_process(&handle);
     for (int is_running = 1; is_running;) {
-        uint64_t current_latest_modified_time = find_latest_modified_time(directory);
+        uint64_t current_latest_modified_time = find_latest_modified_time((char *)directory);
+
+        if (handle.process_stream) {
+            char message[1024] = {0};
+            size_t read_amount = fread(&message, sizeof(message)-1, 1, handle.process_stream);
+
+            while (read_amount > 0) {
+                size_t found_newline_index = 0;
+
+                // Extend a buffer so it fits.
+                while ((read_amount + logs_count) > logs_capacity) {
+                    char *new_ptr = (char*)realloc(logs, logs_capacity * 2);
+                    assert(new_ptr && "Realloc failed, shouldn't continue.");
+
+                    logs = new_ptr;
+                    logs_capacity *= 2;
+                }
+
+                // Finding a Newline.
+                for (size_t index = 0; index < read_amount; ++index) {
+                    if (message[index] == '\n') {
+                        found_newline_index = index;
+                        break;
+                    }
+                }
+
+                char *reading_ptr = message;
+
+                // Write into stdout if you've found a newline.
+                if (found_newline_index > 0) {
+                    strncat(logs, reading_ptr, found_newline_index + 1);
+                    printf("Logs: %s\n", logs);
+                    reading_ptr += found_newline_index;
+                    read_amount -= found_newline_index;
+
+                    memset(logs, 0, logs_capacity);
+                    logs_count = 0;
+                }
+
+                // Concatenate the rest.
+                strcat(logs, reading_ptr);
+                logs_count += read_amount;
+
+                memset(message, 0, sizeof(message));
+                read_amount = fread(&message, sizeof(message)-1, 1, handle.process_stream);
+            }
+        }
 
         if (current_latest_modified_time > latest_modified_time) {
             latest_modified_time = current_latest_modified_time;
