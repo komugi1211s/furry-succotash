@@ -1,5 +1,7 @@
 #include <stdio.h>
 #include <assert.h>
+#define __STDC_FORMAT_MACROS 1
+#include <inttypes.h>
 #include <stdint.h>
 #include <string.h>
 
@@ -27,19 +29,10 @@ extern "C" {
 }
 
 #if _WIN32
-#include <windows.h>
 /* ======================= */
 // Windows. 
 /* ======================= */
-typedef HANDLE Thread_Handle;
-typedef HANDLE Mutex;
-
-typedef DWORD (*thread_proc)(void *params);
-
-void sleep_ms(int ms) {
-    Sleep(ms);
-}
-
+#include "windows.cpp"
 #else
 #include "unix.cpp"
 #endif
@@ -129,17 +122,19 @@ void process_gui(Succotash *succotash, mu_Context *ctx) {
 
     int option = MU_OPT_NOTITLE | MU_OPT_NORESIZE | MU_OPT_NOCLOSE;
     if (mu_begin_window_ex(ctx, "Base_Window", mu_rect(0, 0, 400, 800), option)) {
-        mu_layout_row(ctx, 1, (int[]) { -1 }, 25);
+        int row[] = { -1 };
+        mu_layout_row(ctx, 1, row, 25);
         mu_checkbox(ctx, "Running", &succotash->running);
 
 
         // ============ Command Window ============ 
-        mu_layout_row(ctx, 2, (int[]) { 80, -1 }, 0);
+        int row2[] = { 80, -1 };
+        mu_layout_row(ctx, 2, row2, 0);
         int32_t option = 0;
         option |= (succotash->running) ? MU_OPT_NOINTERACT : 0;
 
         // ============ Status Window ============ 
-        mu_layout_row(ctx, 1, (int[]) { -1 }, 25);
+        mu_layout_row(ctx, 1, row, 25);
         if (succotash->running) {
             char log_buffer[2048] = {0};
             uint64_t file_last_time = 0; // find_latest_modified_time(pair.watch_dir);
@@ -211,7 +206,7 @@ int main(int argc, char **argv) {
         sleep_ms(10);
         uint64_t current_latest_modified_time = find_latest_modified_time((char *)directory);
 
-        if (handle.child_pid != -1) {
+        if (is_process_running(&handle)) {
             read_from_process(&handle, &logs, &logs_capacity, &logs_used);
         }
 

@@ -10,6 +10,7 @@ Process_Handle create_handle_from_command(const char *command_as_chars);
 char *separate_command_to_executable_and_args(const char *in, char *out_arg_list[], size_t arg_capacity);
 
 void run_process(Process_Handle *handle);
+int is_process_running(Process_Handle *handle);
 void restart_process(Process_Handle *handle);
 void read_from_process(Process_Handle *handle, char **malloced_log_buffers, size_t *buffer_capacity, size_t *buffer_count);
 void sleep_ms(int ms);
@@ -36,12 +37,11 @@ struct Succotash {
 
 
 typedef struct Log_Buffer Log_Buffer;
-struct Log_Buffer {
-    Mutex read_write_mtx;
-    char *buffer_ptr;
 
+struct Log_Buffer {
+    char *buffer_ptr;
     size_t capacity;
     size_t used;
-}
+};
 
 #endif
