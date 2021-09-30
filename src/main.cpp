@@ -5,7 +5,6 @@
 #include <stdint.h>
 #include <string.h>
 
-
 #ifdef _WIN32 
 #include <SDL.h>
 #include <SDL_opengl.h>
@@ -136,16 +135,19 @@ void process_gui(Succotash *succotash, mu_Context *ctx) {
         // ============ Status Window ============ 
         mu_layout_row(ctx, 1, row, 25);
         if (succotash->running) {
-            char log_buffer[2048] = {0};
             uint64_t file_last_time = 0; // find_latest_modified_time(pair.watch_dir);
-            if (file_last_time == 0) {
-                snprintf(log_buffer, sizeof(log_buffer), "Error Occurred: %s", strerror(errno));
-            } else {
+
+            char log_buffer[2048] = {0};
+
+            if (file_last_time != 0) {
                 if (succotash->last_modified_time != file_last_time) {
                     succotash->last_modified_time = file_last_time;
                 }
                 snprintf(log_buffer, sizeof(log_buffer), "Last File Modified Time: %" PRIu64 "", file_last_time);
+            } else {
+                snprintf(log_buffer, sizeof(log_buffer), "Error Occurred: %s", strerror(errno));
             } 
+
             mu_text(ctx, log_buffer);
         }
 
@@ -167,6 +169,10 @@ void render_gui(Succotash *succotash, mu_Context *ctx) {
         }
     }
     r_present();
+}
+
+void testing_threads(void *ptrs) {
+    printf("Hello from thread!\n");
 }
 
 int main(int argc, char **argv) {
@@ -194,34 +200,35 @@ int main(int argc, char **argv) {
     uint64_t       latest_modified_time = find_latest_modified_time((char *)directory);
 
     // Buffer.
-    char *logs = (char *)malloc(sizeof(char) * 4096);
-    memset(logs, 0, sizeof(char) * 4096);
+    Log_Buffer buffer = {0};
+    buffer.buffer_ptr = (char *)malloc(sizeof(char) * 4096);
+    buffer.capacity   = sizeof(char) * 4096;
+    buffer.used       = 0;
 
-    size_t logs_used = 0;
-    size_t logs_capacity = 4096;
+    memset(buffer.buffer_ptr, 0, sizeof(char) * 4096);
+    start_process(&handle, &buffer);
 
-    run_process(&handle);
-    printf("Started process... \n");
     for (int is_running = 1; is_running;) {
         sleep_ms(10);
-        uint64_t current_latest_modified_time = find_latest_modified_time((char *)directory);
-
-        if (is_process_running(&handle)) {
-            read_from_process(&handle, &logs, &logs_capacity, &logs_used);
+        if (handle.child_pid == -1) {
+            printf("Failed\n");
+        } else {
+            printf("Running!\n");
         }
+        // uint64_t current_latest_modified_time = find_latest_modified_time((char *)directory);
 
-        if (current_latest_modified_time > latest_modified_time) {
-            latest_modified_time = current_latest_modified_time;
-            restart_process(&handle);
-        }
+        // if (current_latest_modified_time > latest_modified_time) {
+        //     latest_modified_time = current_latest_modified_time;
+        //     restart_process(&handle, &buffer);
+        // }
 
         // not working now.
         // process_event(succotash, ctx);
         // process_gui(succotash, ctx);
         // render_gui(succotash, ctx);
-    }
+    }  
     
-    free(logs);
+    free(buffer.buffer_ptr);
     // free(ctx);
     return 0;
 }

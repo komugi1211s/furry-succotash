@@ -11,21 +11,31 @@
 
 #include "main.h"
 
-typedef pthread_t       Thread_Handle;
-typedef pthread_mutex_t Mutex;
+typedef struct {
+    int state;
+    pthread_mutex_t mutex;
+} Channel;
+
+struct Thread_Handle {
+    pthread_t inner;
+};
 
 struct Process_Handle {
-    int32_t valid;
     const char *command;
 
     int child_pid;
     int reading_pipe[2];
 
+    Thread_Handle stdout_thread;
 };
+
+typedef struct {
+    int read_fd;
+    Log_Buffer *output;
+} Thread_Info;
 
 // ====================================
 // Process handling.
-
 
 Process_Handle create_handle_from_command(const char *command_as_chars){
     Process_Handle handle = {0};
@@ -33,8 +43,8 @@ Process_Handle create_handle_from_command(const char *command_as_chars){
         return handle;
     }
 
-    handle.command = command_as_chars;
-    handle.valid   = 1;
+    handle.command   = command_as_chars;
+    handle.child_pid = -1;
     return handle;
 }
 
@@ -53,7 +63,7 @@ char *separate_command_to_executable_and_args(const char *in, char *out_arg_list
     return executable_command;
 }
 
-void run_process(Process_Handle *handle) {
+void start_process(Process_Handle *handle, Log_Buffer *buffer) {
     // Create Argument list.
 
     if (!create_pipe(handle)) {
@@ -64,12 +74,12 @@ void run_process(Process_Handle *handle) {
     char *exec_command = separate_command_to_executable_and_args(handle->command, arg_list, 32);
 
     int pid = fork();
+
     switch(pid) {
         case -1:
         {
             close_pipe(handle);
             free(exec_command);
-            handle->valid = 0;
             return;
         } break;
 
@@ -94,21 +104,45 @@ void run_process(Process_Handle *handle) {
         } break;
     }
 
+
+    handle->stdout_thread = start_stdout_thread(handle, buffer);
     free(exec_command);
     return;
 }
 
-void restart_process(Process_Handle *handle) {
-    if (!handle->valid) return;
+void restart_process(Process_Handle *handle, Log_Buffer *buffer) {
+    if (handle->child_pid == 0 || handle->child_pid == -1) return;
 
     kill(handle->child_pid, SIGTERM);
+    close_pipe(handle);
+
     handle->child_pid = -1;
 
-    close_pipe(handle);
-    run_process(handle);
+    start_process(handle, buffer);
 }
 
-void read_from_process(Process_Handle *handle, char **malloced_log_buffers, size_t *buffer_capacity, size_t *buffer_used) {
+int is_process_running(Process_Handle *handle) {
+    return handle->child_pid != -1;
+}
+
+// repeatedly read stdout from process.
+// should be used within the thread.
+
+typedef struct {
+    Process_Handle *handle;
+    Log_Buffer *buffer;
+} stdout_task_thr_info;
+
+void handle_stdout_for_process(void *ptr) {
+    stdout_task_thr_info info = *(stdout_task_thr_info *)ptr;
+    delete (stdout_task_thr_info *)(ptr);
+
+    Process_Handle *handle = info.handle;
+    Log_Buffer *log_buffer = info.buffer;
+    handle->child_pid = -1;
+
+    return;
+
     char message[1024] = {0};
     size_t read_amount = 0;
 
@@ -121,19 +155,18 @@ void read_from_process(Process_Handle *handle, char **malloced_log_buffers, size
     read_amount = (size_t) read_amount_or_error;
 
     while (read_amount > 0) {
-        size_t found_newline_index = 0;
-
-        // Extend a buffer so it fits.
-        while ((read_amount + *buffer_used) > *buffer_capacity) {
-            printf("Warning: Buffer size limited: need %" PRIu64 " but has %" PRIu64 ". expanding to power of 2\n", (read_amount + *buffer_used), *buffer_capacity);
-            char *new_ptr = (char *)realloc(*malloced_log_buffers, (*buffer_capacity) * 2);
+        // Extend buffer accordingly.
+        while((log_buffer->used + read_amount) > log_buffer->capacity) {
+            char *new_ptr = (char *)realloc(log_buffer->buffer_ptr, log_buffer->capacity * 2);
             assert(new_ptr && "Realloc failed, shouldn't continue.");
 
-            *malloced_log_buffers = new_ptr;
-            (*buffer_capacity) *= 2;
+            log_buffer->buffer_ptr = new_ptr;
+            log_buffer->capacity   = log_buffer->capacity * 2;
         }
 
         // Finding a Newline.
+        size_t found_newline_index = 0;
+
         for (size_t index = 0; index < read_amount; ++index) {
             if (message[index] == '\n' || message[index] == 0) {
                 found_newline_index = index;
@@ -142,22 +175,21 @@ void read_from_process(Process_Handle *handle, char **malloced_log_buffers, size
         }
 
         char *reading_ptr = message;
-        char *logs = *malloced_log_buffers;
 
         // Write into stdout if you've found a newline.
         if (found_newline_index > 0) {
-            strncat(logs, reading_ptr, found_newline_index + 1);
-            printf("[Logs] %s", logs);
+            strncat(log_buffer->buffer_ptr, reading_ptr, found_newline_index + 1);
+            printf("[Logs] %s", log_buffer->buffer_ptr);
             reading_ptr += found_newline_index;
             read_amount -= found_newline_index;
 
-            memset(logs, 0, *buffer_capacity);
-            *buffer_used = 0;
+            memset(log_buffer->buffer_ptr, 0, log_buffer->capacity);
+            log_buffer->used = 0;
         }
 
         // Concatenate the rest.
-        strcat(logs, reading_ptr);
-        *buffer_used += read_amount;
+        strcat(log_buffer->buffer_ptr, reading_ptr);
+        log_buffer->used += read_amount;
 
         memset(message, 0, sizeof(message));
         read_amount_or_error = read(handle->reading_pipe[0], &message, sizeof(message)-1);
@@ -173,12 +205,13 @@ void read_from_process(Process_Handle *handle, char **malloced_log_buffers, size
     }
 }
 
+// Create pipe for given handle.
+// crashes on invalid handle.
 int create_pipe(Process_Handle *handle) {
-    assert(handle->valid && "Cannot create pipe for invalid handle.");
+    assert(handle->child_pid == -1 && "Cannot create pipe for alive handle.");
     const int PIPE_SUCCESS = 0;
 
     if (pipe(handle->reading_pipe)) {
-        handle->valid = 0;
         return 0;
     }
 
@@ -195,6 +228,7 @@ int create_pipe(Process_Handle *handle) {
     return 1;
 }
 
+// Close given pipe completely.
 void close_pipe(Process_Handle *handle) {
     if (handle->reading_pipe[0] != 0) {
         close(handle->reading_pipe[0]);
@@ -206,15 +240,47 @@ void close_pipe(Process_Handle *handle) {
     }
 }
 
+// ====================================
+// Threading.
+
+
+void *stdout_task(void *arg) {
+    printf("begin\n");
+    handle_stdout_for_process(arg);
+    printf("end\n");
+
+    pthread_exit(NULL);
+    return NULL;
+}
+
+Thread_Handle start_stdout_thread(Process_Handle *handle, Log_Buffer *buffer) {
+    Thread_Handle thread = {0};
+
+    stdout_task_thr_info *i = new stdout_task_thr_info;
+    i->handle = handle;
+    i->buffer = buffer;
+
+    pthread_create(&thread.inner, NULL, stdout_task, (void *)i); // problem!
+    return thread;
+}
 
 // ====================================
 // Files.
 
+// Check if given path is forbidden to process.
+bool is_forbidden_path(char *path) {
+    return (
+        strcmp(path, ".")  == 0 ||
+        strcmp(path, "..") == 0
+    );
+}
 
 uint64_t find_latest_modified_time(char *path) {
-    if (strcmp(path, ".") == 0 || strcmp(path, "..") == 0) return 0;
-    size_t file_path_length = strlen(path);
+    if (is_forbidden_path(path)) return 0;
+    size_t path_length = strlen(path);
 
+
+    // Get file's information, returning on failure
     struct stat status;
     if (stat(path, &status) == -1) {
         printf("failed to load path by stat: %s, path: %s\n", strerror(errno), path);
@@ -223,31 +289,27 @@ uint64_t find_latest_modified_time(char *path) {
 
     if (S_ISDIR(status.st_mode)) {
         DIR *dir = opendir(path);
-#define FILEPATH_SIZE 2048
 
         if (dir) {
             uint64_t current_latest = 0;
             for(struct dirent *file_entry = readdir(dir); file_entry; file_entry = readdir(dir))
             {
-                if (file_entry) { // NOTE: do i need to do this?
-                    // Skip current / past directory
-                    if (strcmp(file_entry->d_name, ".") == 0 ||
-                        strcmp(file_entry->d_name, "..") == 0) continue;
+                if (is_forbidden_path(file_entry->d_name)) continue;
 
-                    size_t filename_length = strlen(file_entry->d_name);
-                    size_t total_filepath_length = filename_length + file_path_length;
+                size_t name_length  = strlen(file_entry->d_name);
+                size_t total_length = name_length + path_length;
 
-                    if (total_filepath_length < FILEPATH_SIZE) {
-                        char filepath[FILEPATH_SIZE] = {0};
-                        snprintf(filepath, FILEPATH_SIZE, "%s/%s", path, file_entry->d_name);
-                        uint64_t file_time = find_latest_modified_time(filepath); // recursive call
+                if (total_length < 1024) {
+                    char filepath[1024] = {0};
+                    snprintf(filepath, 1024, "%s/%s", path, file_entry->d_name);
+                    uint64_t file_time = find_latest_modified_time(filepath); // recursive call
 
-                        current_latest = (file_time > current_latest) ? file_time : current_latest;
-                    } else {
-                        printf("failed to open file: file path length too long\n");
-                    }
+                    current_latest = (file_time > current_latest) ? file_time : current_latest;
+                } else {
+                    printf("failed to open file: file path length too long\n");
                 }
             }
+
             closedir(dir);
             return current_latest;
         } else {
