@@ -6,9 +6,63 @@ struct Thread_Handle {
 };
 
 struct Process_Handle {
+    int32_t valid;
     const char          *command;
     PROCESS_INFORMATION procinfo;
+
+    HANDLE read_pipe;
+    HANDLE write_pipe;
 };
+
+int create_my_own_pipe(HANDLE *read_out, HANDLE *write_out) {
+    char pipe_name[256] = {0};
+    sprintf(pipe_name, "\\\\.\\pipe\\Pipe%08x", GetCurrentProcessId());
+    
+    SECURITY_ATTRIBUTES attr = {0};
+    attr.nLength = sizeof(attr);
+    attr.bInheritHandle = TRUE;
+    attr.lpSecurityDescriptor = NULL;
+
+    HANDLE read = CreateNamedPipe(pipe_name,
+                                   PIPE_ACCESS_INBOUND | FILE_FLAG_OVERLAPPED,
+                                   PIPE_TYPE_BYTE      | PIPE_NOWAIT,
+                                   1,
+                                   4096,
+                                   4096,
+                                   4 * 1000,
+                                   &attr);
+
+    if (read == INVALID_HANDLE_VALUE) {
+        printf("failed to create read pipe.\n");
+        return 0;
+    }
+
+    HANDLE write = CreateFile(pipe_name,
+                              GENERIC_WRITE,
+                              0,
+                              &attr,
+                              OPEN_EXISTING,
+                              FILE_ATTRIBUTE_NORMAL | FILE_FLAG_OVERLAPPED,
+                              NULL);
+
+    if (write == INVALID_HANDLE_VALUE) {
+        printf("failed to create write pipe.\n");
+        CloseHandle(read);
+        return 0;
+    }
+
+    if (!SetHandleInformation(read, HANDLE_FLAG_INHERIT, 0)) {
+        printf("failed to set-up information for a pipe.\n");
+        CloseHandle(read);
+        CloseHandle(write);
+        return 0;
+    }
+
+    *read_out  = read;
+    *write_out = write;
+
+    return 1;
+}
 
 Process_Handle create_handle_from_command(const char *command_as_chars) {
     Process_Handle handle = {0};
@@ -16,7 +70,23 @@ Process_Handle create_handle_from_command(const char *command_as_chars) {
     handle.command = command_as_chars;
     ZeroMemory(&handle.procinfo, sizeof(PROCESS_INFORMATION));
 
+    SECURITY_ATTRIBUTES attr = {0};
+    attr.nLength = sizeof(attr);
+    attr.bInheritHandle = TRUE;
+    attr.lpSecurityDescriptor = NULL;
+    // if (!create_my_own_pipe(&handle.read_pipe, &handle.write_pipe)) {
+    //     printf("Error: failed to create a pipe.\n");
+    //     return handle;
+    // }
+
+    handle.valid = 1;
     return handle;
+}
+
+void destroy_handle(Process_Handle *handle) {
+    terminate_process(handle);
+    // CloseHandle(handle.read_pipe);
+    // CloseHandle(handle.write_pipe);
 }
 
 char *strsep(char **stringp, const char *delim) {
@@ -36,11 +106,23 @@ char *strsep(char **stringp, const char *delim) {
 }
 
 int is_process_running(Process_Handle *handle) {
-    PROCESS_INFORMATION empty = {0};
+    HANDLE empty = {0};
+    if(handle->procinfo.hProcess == empty) return 0;
 
-    return (
-        handle->procinfo.hProcess != empty.hProcess
-    );
+    DWORD exit_code;
+    GetExitCodeProcess(handle->procinfo.hProcess, &exit_code);
+
+    if (exit_code == STILL_ACTIVE) {
+        switch(WaitForSingleObject(handle->procinfo.hProcess, 0)) {
+            case WAIT_TIMEOUT:
+                return 1;
+
+            default:
+                return 0;
+        }
+    } else {
+        return 0;
+    }
 }
 
 char *separate_command_to_executable_and_args(const char *in, char *out_arg_list[], size_t arg_capacity) {
@@ -62,20 +144,37 @@ char *separate_command_to_executable_and_args(const char *in, char *out_arg_list
     return executable_command;
 }
 
+void terminate_process(Process_Handle *process) { // try to terminate the process whether it's alive or not.
+    TerminateProcess(process->procinfo.hProcess, 0);
+
+    WaitForSingleObject(process->procinfo.hProcess, INFINITE);
+    WaitForSingleObject(process->procinfo.hThread,  INFINITE);
+
+    CloseHandle(process->procinfo.hProcess);
+    CloseHandle(process->procinfo.hThread);
+}
+
+void restart_process(Process_Handle *handle, Log_Buffer *buffer) {
+    assert(is_process_running(handle) && "Process is not running");
+    terminate_process(handle);
+
+    assert(!is_process_running(handle) && "Process is still runnning despite of terminate process");
+    ZeroMemory(&handle->procinfo, sizeof(handle->procinfo));
+
+    start_process(handle, buffer);
+}
+
 void start_process(Process_Handle *handle, Log_Buffer *buffer) {
     STARTUPINFO info;
-    ZeroMemory(&info, sizeof(info));
+    ZeroMemory(&info, sizeof(STARTUPINFO));
     info.cb = sizeof(info);
+    // info.hStdOutput = handle->write_pipe;
+    // info.dwFlags    = STARTF_USESTDHANDLES;
 
-    char *arg_list[32] = {0};
-    size_t arg_capacity = 32; 
-
-    char *exec_command = separate_command_to_executable_and_args(handle->command,
-                                                                 arg_list,
-                                                                 arg_capacity);
-    printf("Running process: %s\n", exec_command);
-    BOOL created = CreateProcess(exec_command,
-                                 (TCHAR *)arg_list,
+    TCHAR process_command[1024] = {0};
+    ua_tcscpy_s(process_command, sizeof(process_command), handle->command);
+    BOOL created = CreateProcess(NULL,
+                                 process_command,
                                  NULL,
                                  NULL,
                                  FALSE,
@@ -85,12 +184,61 @@ void start_process(Process_Handle *handle, Log_Buffer *buffer) {
                                  &info,
                                  &handle->procinfo);
 
-    free(exec_command);
-    if (!created) {
+    if (created == 0) {
         printf("error code: %d\n", GetLastError());
         ZeroMemory(&handle->procinfo, sizeof(handle->procinfo));
-    }
+    }   
+
+    // CloseHandle(handle->write_pipe);
+    // printf("Closed Write end of handle.\n");
     return;
+}
+
+void handle_stdout_for_process(Process_Handle *process, Log_Buffer *log_buffer) {
+    if (!is_process_running(process)) return;
+
+    // DWORD current_pipe_occupied_amount = 0;
+    // BOOL peeked_pipe = PeekNamedPipe(process->read_pipe, NULL, 0, NULL, &current_pipe_occupied_amount, NULL);
+    char buffer[1024] = {0};
+    DWORD bytes_read;
+
+    BOOL succeed = ReadFile(process->read_pipe, &buffer, 1023, &bytes_read, NULL);
+
+    if (succeed == 0) {
+        printf("Could not peek the pipe: %d\n", GetLastError());
+        return;
+    }
+
+    printf("Occupied amount: %d\n", bytes_read);
+    while (succeed != 0 && bytes_read > 0) {
+        while((bytes_read + log_buffer->used) > log_buffer->capacity) {
+            void *new_buffer = realloc(log_buffer->buffer_ptr, log_buffer->capacity * 2);
+            assert(new_buffer && "failed to realloc new buffer.");
+
+            log_buffer->buffer_ptr = (char *)new_buffer;
+            log_buffer->capacity   = log_buffer->capacity * 2;
+        }
+
+        int begin = 0, end = 0;
+        for (; end < bytes_read; ++end) {
+            if (buffer[end] == '\n') {
+                strncat(log_buffer->buffer_ptr, &buffer[begin],(end + 1) - begin);
+                printf("[Logs] %s", log_buffer->buffer_ptr);
+                
+                memset(log_buffer->buffer_ptr, 0, log_buffer->capacity);
+                log_buffer->used = 0;
+                begin = end + 1;
+            }
+        }
+
+        if (begin != end) {
+            strncat(log_buffer->buffer_ptr, &buffer[begin], end - begin);
+            log_buffer->used += end - begin;
+        }
+
+        memset(buffer, 0, sizeof(buffer));
+        succeed = ReadFile(process->read_pipe, &buffer, 1023, &bytes_read, 0);
+    }
 }
 
 // Check if given path is forbidden to process.

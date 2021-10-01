@@ -35,6 +35,7 @@ char *separate_command_to_executable_and_args(const char *in, char *out_arg_list
 
 void start_process(Process_Handle *handle, Log_Buffer *buffer);
 void restart_process(Process_Handle *handle, Log_Buffer *buffer);
+void terminate_process(Process_Handle *handle); // try to terminate the process whether it's alive or not.
 
 int  is_process_running(Process_Handle *handle);
 void sleep_ms(int ms);

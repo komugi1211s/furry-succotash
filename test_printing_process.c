@@ -8,7 +8,8 @@
 #endif
 
 int main(void) {
-    while(1) {
+    printf("Started Running!\n");
+    for (int i = 0; i < 5; ++i) {
         Slp(2);
         printf("Hello!\n");
     }

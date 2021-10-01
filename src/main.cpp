@@ -200,36 +200,52 @@ int main(int argc, char **argv) {
     Process_Handle handle               = create_handle_from_command(command);
     uint64_t       latest_modified_time = find_latest_modified_time((char *)directory);
 
+    if (!handle.valid) {
+        printf("Failed to start a program.\n");
+        return 0;
+    }
+
     // Buffer.
     Log_Buffer buffer = {0};
-    buffer.buffer_ptr = (char *)malloc(sizeof(char) * 4096);
-    buffer.capacity   = sizeof(char) * 4096;
-    buffer.used       = 0;
+    // buffer.buffer_ptr = (char *)malloc(sizeof(char) * 4096);
+    // buffer.capacity   = sizeof(char) * 4096;
+    // buffer.used       = 0;
 
-    memset(buffer.buffer_ptr, 0, sizeof(char) * 4096);
+    // memset(buffer.buffer_ptr, 0, sizeof(char) * 4096);
     start_process(&handle, &buffer);
-
+    int32_t process_was_alive_previous_frame = 0;
     for (int is_running = 1; is_running;) {
-        sleep_ms(100);
-        if (!is_process_running(&handle)) {
-            printf("Process Died!\n");
-            break;
+        int32_t process_is_alive = is_process_running(&handle);
+        if (!process_is_alive) {
+            if (process_was_alive_previous_frame) {
+                printf("Process Died! waiting to restart...\n");
+            }
         }
+        // handle_stdout_for_process(&handle, &buffer);
         uint64_t current_latest_modified_time = find_latest_modified_time((char *)directory);
 
         if (current_latest_modified_time > latest_modified_time) {
+            printf("files changed! restarting... \n");
             latest_modified_time = current_latest_modified_time;
-            printf("Modification found.\n");
-        //    restart_process(&handle, &buffer);
+            
+            if (!process_is_alive) {
+                terminate_process(&handle); // just in case;
+                start_process(&handle, &buffer);
+            } else {
+                restart_process(&handle, &buffer);
+            }
         }
 
         // not working now.
         // process_event(succotash, ctx);
         // process_gui(succotash, ctx);
         // render_gui(succotash, ctx);
+
+        process_was_alive_previous_frame = process_is_alive;
     }  
     
-    free(buffer.buffer_ptr);
+    destroy_handle(&handle);
+    // free(buffer.buffer_ptr);
     // free(ctx);
     return 0;
 }
