@@ -6,6 +6,7 @@
 #include <string.h>
 
 #ifdef _WIN32 
+#define SDL_MAIN_HANDLED 1 
 #include <SDL.h>
 #include <SDL_opengl.h>
 #else
@@ -194,7 +195,7 @@ int main(int argc, char **argv) {
     /* main loop */
 
     const char *directory = "./src";
-    const char *command   = "./test_printing_process";
+    const char *command   = "./test_printing_process.exe";
 
     Process_Handle handle               = create_handle_from_command(command);
     uint64_t       latest_modified_time = find_latest_modified_time((char *)directory);
@@ -209,12 +210,12 @@ int main(int argc, char **argv) {
     start_process(&handle, &buffer);
 
     for (int is_running = 1; is_running;) {
-        sleep_ms(10);
-        if (handle.child_pid == -1) {
-            printf("Failed\n");
-        } else {
-            printf("Running!\n");
+        sleep_ms(16);
+        if (!is_process_running(&handle)) {
+            printf("Process Died!\n");
+            break;
         }
+
         // uint64_t current_latest_modified_time = find_latest_modified_time((char *)directory);
 
         // if (current_latest_modified_time > latest_modified_time) {
