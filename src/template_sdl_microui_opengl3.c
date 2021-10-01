@@ -244,12 +244,12 @@ static const char key_map[256] = {
     [ SDLK_BACKSPACE    & 0xff ] = MU_KEY_BACKSPACE,
 };
 
-static int text_width(mu_Font font, const char *text, int len) {
+int text_width(mu_Font font, const char *text, int len) {
     if (len == -1) { len = strlen(text); }
     return r_get_text_width(text, len);
 }
 
-static int text_height(mu_Font font) {
+int text_height(mu_Font font) {
     return r_get_text_height();
 }
 
@@ -264,7 +264,7 @@ static GLubyte color_buf[BUFFER_SIZE * 16];
 static GLuint  index_buf[BUFFER_SIZE *  6];
 
 static int width  = 300;
-static int height = 500;
+static int height = 100;
 static int buf_idx;
 
 static SDL_Window *window;

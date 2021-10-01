@@ -7,7 +7,6 @@ struct Thread_Handle {
 
 struct Process_Handle {
     int32_t valid;
-    const char          *command;
     PROCESS_INFORMATION procinfo;
 
     HANDLE read_pipe;
@@ -64,10 +63,8 @@ int create_my_own_pipe(HANDLE *read_out, HANDLE *write_out) {
     return 1;
 }
 
-Process_Handle create_handle_from_command(const char *command_as_chars) {
+Process_Handle create_process_handle() {
     Process_Handle handle = {0};
-
-    handle.command = command_as_chars;
     ZeroMemory(&handle.procinfo, sizeof(PROCESS_INFORMATION));
 
     SECURITY_ATTRIBUTES attr = {0};
@@ -154,17 +151,17 @@ void terminate_process(Process_Handle *process) { // try to terminate the proces
     CloseHandle(process->procinfo.hThread);
 }
 
-void restart_process(Process_Handle *handle, Log_Buffer *buffer) {
+void restart_process(const char *command, Process_Handle *handle, Log_Buffer *buffer) {
     assert(is_process_running(handle) && "Process is not running");
     terminate_process(handle);
 
     assert(!is_process_running(handle) && "Process is still runnning despite of terminate process");
     ZeroMemory(&handle->procinfo, sizeof(handle->procinfo));
 
-    start_process(handle, buffer);
+    start_process(command, handle, buffer);
 }
 
-void start_process(Process_Handle *handle, Log_Buffer *buffer) {
+void start_process(const char *command, Process_Handle *handle, Log_Buffer *buffer) {
     STARTUPINFO info;
     ZeroMemory(&info, sizeof(STARTUPINFO));
     info.cb = sizeof(info);
@@ -172,7 +169,7 @@ void start_process(Process_Handle *handle, Log_Buffer *buffer) {
     // info.dwFlags    = STARTF_USESTDHANDLES;
 
     TCHAR process_command[1024] = {0};
-    ua_tcscpy_s(process_command, sizeof(process_command), handle->command);
+    ua_tcscpy_s(process_command, sizeof(process_command), command);
     BOOL created = CreateProcess(NULL,
                                  process_command,
                                  NULL,

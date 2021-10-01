@@ -753,11 +753,16 @@ int mu_button_ex(mu_Context *ctx, const char *label, int icon, int opt) {
 
 
 int mu_checkbox(mu_Context *ctx, const char *label, int *state) {
+    return mu_checkbox_ex(ctx, label, state, 0);
+}
+
+
+int mu_checkbox_ex(mu_Context *ctx, const char *label, int *state, int opt) {
   int res = 0;
   mu_Id id = mu_get_id(ctx, &state, sizeof(state));
   mu_Rect r = mu_layout_next(ctx);
   mu_Rect box = mu_rect(r.x, r.y, r.h, r.h);
-  mu_update_control(ctx, id, r, 0);
+  mu_update_control(ctx, id, r, opt);
   /* handle click */
   if (ctx->mouse_pressed == MU_MOUSE_LEFT && ctx->focus == id) {
     res |= MU_RES_CHANGE;

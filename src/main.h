@@ -3,26 +3,6 @@
 #include <stdlib.h>
 #include <stdint.h>
 
-// ====================================
-// Shared.
-
-typedef struct Thread_Handle Thread_Handle;
-
-typedef struct Succotash Succotash;
-
-struct Succotash {
-    int32_t running;
-    uint64_t last_modified_time;
-};
-
-
-typedef struct Log_Buffer Log_Buffer;
-
-struct Log_Buffer {
-    char *buffer_ptr;
-    size_t capacity;
-    size_t used;
-};
 
 #define THREAD_TASK(name) void *name(void *arguments);
 
@@ -30,10 +10,11 @@ struct Log_Buffer {
 // Process handling.
 
 struct Process_Handle;
-Process_Handle create_handle_from_command(const char *command_as_chars);
+struct Log_Buffer;
+Process_Handle create_process_handle();
 char *separate_command_to_executable_and_args(const char *in, char *out_arg_list[], size_t arg_capacity);
 
-void start_process(Process_Handle *handle, Log_Buffer *buffer);
+void start_process(const char *command, Process_Handle *handle, Log_Buffer *buffer);
 void restart_process(Process_Handle *handle, Log_Buffer *buffer);
 void terminate_process(Process_Handle *handle); // try to terminate the process whether it's alive or not.
 
@@ -57,5 +38,18 @@ void handle_stdout_task(void *ptr);
 
 uint64_t find_latest_modified_time(char *path);
 
+
+// ====================================
+// Shared.
+
+typedef struct Thread_Handle Thread_Handle;
+typedef struct Succotash Succotash;
+
+typedef struct Log_Buffer Log_Buffer;
+struct Log_Buffer {
+    char *buffer_ptr;
+    size_t capacity;
+    size_t used;
+};
 
 #endif
