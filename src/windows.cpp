@@ -93,9 +93,54 @@ void start_process(Process_Handle *handle, Log_Buffer *buffer) {
     return;
 }
 
+// Check if given path is forbidden to process.
+bool is_forbidden_path(char *path) {
+    return (
+        strcmp(path, ".")  == 0 ||
+        strcmp(path, "..") == 0
+    );
+}
 
 uint64_t find_latest_modified_time(char *filepath) {
-    return 0;
+    if (is_forbidden_path(filepath)) return 0;
+    WIN32_FIND_DATA data = {0};
+    HANDLE handle = FindFirstFile(filepath, &data);
+
+    if (handle == INVALID_HANDLE_VALUE) {
+        printf("File %s is invalid\n", filepath);
+        return 0;
+    }
+
+    uint64_t result = 0;
+    if (data.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) {
+        char dir_search_term[1024] = {0};
+        snprintf(dir_search_term, 1024, "%s\\*", filepath);
+
+        WIN32_FIND_DATA dir_data = {0};
+        HANDLE directory_handle = FindFirstFile(dir_search_term, &dir_data);
+
+        do {
+            if (!is_forbidden_path(dir_data.cFileName)) {
+                memset(dir_search_term, 0, sizeof(dir_search_term));
+                snprintf(dir_search_term, sizeof(dir_search_term), "%s\\%s", filepath, dir_data.cFileName);
+                uint64_t write_time_for_given_file = find_latest_modified_time(dir_search_term);
+
+                if (write_time_for_given_file > result) {
+                    result = write_time_for_given_file;
+                }
+            }
+        } while(FindNextFile(directory_handle, &dir_data));
+
+        FindClose(directory_handle);
+    } else {
+        ULARGE_INTEGER lg = {};
+        lg.u.HighPart = data.ftLastWriteTime.dwHighDateTime;
+        lg.u.LowPart  = data.ftLastWriteTime.dwLowDateTime;
+        result = lg.QuadPart;
+    }
+
+    FindClose(handle);
+    return result;
 }
 
 void sleep_ms(int ms) {

@@ -210,18 +210,18 @@ int main(int argc, char **argv) {
     start_process(&handle, &buffer);
 
     for (int is_running = 1; is_running;) {
-        sleep_ms(16);
+        sleep_ms(100);
         if (!is_process_running(&handle)) {
             printf("Process Died!\n");
             break;
         }
+        uint64_t current_latest_modified_time = find_latest_modified_time((char *)directory);
 
-        // uint64_t current_latest_modified_time = find_latest_modified_time((char *)directory);
-
-        // if (current_latest_modified_time > latest_modified_time) {
-        //     latest_modified_time = current_latest_modified_time;
-        //     restart_process(&handle, &buffer);
-        // }
+        if (current_latest_modified_time > latest_modified_time) {
+            latest_modified_time = current_latest_modified_time;
+            printf("Modification found.\n");
+        //    restart_process(&handle, &buffer);
+        }
 
         // not working now.
         // process_event(succotash, ctx);
