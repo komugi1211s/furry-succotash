@@ -37,7 +37,7 @@ void handle_stdout_task(void *ptr);
 // Files.
 
 uint64_t find_latest_modified_time(char *path);
-
+void select_new_folder(char *folder_buffer, size_t folder_buffer_size);
 
 // ====================================
 // Shared.

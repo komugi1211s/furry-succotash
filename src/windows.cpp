@@ -1,4 +1,6 @@
-#include <windows.h>
+#include <Commdlg.h>
+#include <ShlObj.h>
+#include <Windows.h>
 #include "main.h"
 
 struct Thread_Handle {
@@ -244,6 +246,65 @@ bool is_forbidden_path(char *path) {
         strcmp(path, ".")  == 0 ||
         strcmp(path, "..") == 0
     );
+}
+
+static int CALLBACK
+SHBrowseProc(HWND hwnd, UINT umsg, LPARAM lParam, LPARAM lpData) {
+    if (umsg == BFFM_INITIALIZED) {
+        SendMessage(hwnd, BFFM_SETSELECTION, TRUE, lpData);
+    }
+    return 0;
+}
+
+void select_new_folder(char *folder_buffer, size_t folder_buffer_size) {
+    BROWSEINFO info = {0};
+    char buffer[MAX_PATH] = {0};
+    strncpy(buffer, folder_buffer, MAX_PATH);
+    
+    info.hwndOwner = NULL;
+    info.lpszTitle = "Select a target directory...";
+    info.ulFlags   = BIF_DONTGOBELOWDOMAIN | BIF_NEWDIALOGSTYLE | BIF_NONEWFOLDERBUTTON;
+    info.lParam    = (LPARAM)&buffer;
+    info.lpfn      = SHBrowseProc;
+
+    PIDLIST_ABSOLUTE Pidlist = SHBrowseForFolderA(&info);
+    if (Pidlist) {
+        SHGetPathFromIDListA(Pidlist, buffer);
+        IMalloc *allocator;
+        SHGetMalloc(&allocator);
+
+        if (allocator) {
+            allocator->Free(Pidlist);
+            allocator->Release();
+        }
+
+        if (strlen(buffer) < folder_buffer_size) {
+            memset(folder_buffer, 0,folder_buffer_size);
+            strncpy(folder_buffer, buffer, strlen(buffer));
+        }
+    }
+}
+
+void select_file(char *file_buffer, size_t file_buffer_size) {
+    char buffer[MAX_PATH] = {0};
+    strncpy(buffer, file_buffer, MAX_PATH);
+
+    OPENFILENAME filename;
+    ZeroMemory(&filename, sizeof(filename));
+    filename.lStructSize = sizeof(filename);
+    filename.lpstrFilter = ".exe;.com;.bat;.sh;";
+    filename.lpstrFile   = buffer;
+    filename.nMaxFile    = MAX_PATH;
+    filename.lpstrTitle  = "Select a process to run...";
+
+    filename.Flags = OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST | OFN_NONETWORKBUTTON;
+
+    if (GetOpenFileNameA(&filename)) {
+        if (strlen(buffer) < file_buffer_size) {
+            memset(file_buffer, 0,file_buffer_size);
+            strncpy(file_buffer, buffer, strlen(buffer));
+        }
+    }
 }
 
 uint64_t find_latest_modified_time(char *filepath) {

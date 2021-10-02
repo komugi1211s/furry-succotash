@@ -43,6 +43,7 @@ struct Succotash {
     int32_t running;
     uint64_t last_modified_time;
 
+    int32_t folder_is_invalid;
     char directory[256];
     char command[256];
 
@@ -130,7 +131,7 @@ void process_gui(Succotash *succotash, mu_Context *ctx) {
     mu_begin(ctx);
     int32_t process_is_running = is_process_running(&succotash->handle); // just for display!
 
-    if (mu_begin_window_ex(ctx, "Base_Window", mu_rect(0, 0, 400, 800), MU_OPT_NOTITLE | MU_OPT_NORESIZE | MU_OPT_NOCLOSE)) {
+    if (mu_begin_window_ex(ctx, "Base_Window", mu_rect(0, 0, 350, 300), MU_OPT_NOTITLE | MU_OPT_NORESIZE | MU_OPT_NOCLOSE)) {
         int row[] = { 80, -1 };
         mu_layout_row(ctx, 2, row, 25);
         if(mu_button(ctx, "Start/Stop")) {
@@ -144,22 +145,34 @@ void process_gui(Succotash *succotash, mu_Context *ctx) {
 
         // ============ Command Window ============ 
         int row2[] = { 80, -1 };
-        mu_layout_row(ctx, 2, row2, 0);
+        mu_layout_row(ctx, 2, row2, 0); 
         int32_t option = 0;
         option |= (process_is_running) ? MU_OPT_NOINTERACT : 0;
 
-        mu_text(ctx, "Directory");
-        mu_textbox_ex(ctx, succotash->directory, sizeof(succotash->directory), option);
+        if(mu_button_ex(ctx, "Directory", 0, option)) {
+            select_new_folder(succotash->directory, sizeof(succotash->directory));
+            succotash->folder_is_invalid = 0;
+        }
 
-        mu_text(ctx, "Command");
+        if(mu_textbox_ex(ctx, succotash->directory, sizeof(succotash->directory), option) & MU_RES_SUBMIT) {
+            succotash->folder_is_invalid = 0;
+        }
+
+        if(mu_button_ex(ctx, "Command", 0, option)) {
+            select_file(succotash->command, sizeof(succotash->command)); 
+        }
         mu_textbox_ex(ctx, succotash->command, sizeof(succotash->command), option);
 
         // ============ Status Window ============ 
         int full_row[] = { -1 };
         mu_layout_row(ctx, 1, full_row, 25);
-        char log_buffer[2048] = {0};
-        snprintf(log_buffer, sizeof(log_buffer), "Last File Modified Time: %" PRIu64 "", succotash->last_modified_time);
-        mu_text(ctx, log_buffer);
+        if (succotash->folder_is_invalid) {
+            mu_label(ctx, "Folder is Invalid.");
+        } else {
+            char log_buffer[2048] = {0};
+            snprintf(log_buffer, sizeof(log_buffer), "Last File Modified Time: %" PRIu64 "", succotash->last_modified_time);
+            mu_label(ctx, log_buffer);
+        }
 
         mu_end_window(ctx);
     }
@@ -200,10 +213,11 @@ int main(int argc, char **argv) {
 
     /* main loop */
     strcat(succotash->directory, "./src");
-    strcat(succotash->command,  "./test_printing_process.exe");
+    strcat(succotash->command,   "./test_printing_process.exe");
 
-    succotash->handle               = create_process_handle();
+    succotash->handle             = create_process_handle();
     succotash->last_modified_time = find_latest_modified_time((char *)succotash->directory);
+    succotash->folder_is_invalid  = succotash->last_modified_time == 0;
 
     if (!succotash->handle.valid) {
         printf("Failed to start a program.\n");
@@ -228,16 +242,22 @@ int main(int argc, char **argv) {
             }
         }
 
-        uint64_t current_latest_modified_time = find_latest_modified_time((char *)succotash->directory);
-        if (current_latest_modified_time > succotash->last_modified_time) {
-            printf("files changed! restarting... \n");
-            succotash->last_modified_time = current_latest_modified_time;
-            
-            if (!process_is_alive) {
-                terminate_process(&succotash->handle); // just in case;
-                start_process(succotash->command, &succotash->handle, &buffer);
-            } else {
-                restart_process(succotash->command, &succotash->handle, &buffer);
+        if (!succotash->folder_is_invalid) {
+            uint64_t current_latest_modified_time = find_latest_modified_time((char *)succotash->directory);
+
+            if (current_latest_modified_time > succotash->last_modified_time) {
+                printf("files changed! restarting... \n");
+                succotash->last_modified_time = current_latest_modified_time;
+                
+                if (!process_is_alive) {
+                    terminate_process(&succotash->handle); // just in case;
+                    start_process(succotash->command, &succotash->handle, &buffer);
+                } else {
+                    restart_process(succotash->command, &succotash->handle, &buffer);
+                }
+            } else if (current_latest_modified_time == 0) {
+                printf("Folder became invalid. disabling restart \n");
+                succotash->folder_is_invalid = 1;
             }
         }
 

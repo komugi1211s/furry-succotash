@@ -263,8 +263,8 @@ static GLfloat  vert_buf[BUFFER_SIZE *  8];
 static GLubyte color_buf[BUFFER_SIZE * 16];
 static GLuint  index_buf[BUFFER_SIZE *  6];
 
-static int width  = 300;
-static int height = 100;
+static int width  = 350;
+static int height = 300;
 static int buf_idx;
 
 static SDL_Window *window;
