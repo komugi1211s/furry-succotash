@@ -15,68 +15,72 @@ struct Process_Handle {
     HANDLE write_pipe;
 };
 
-int create_my_own_pipe(HANDLE *read_out, HANDLE *write_out) {
+int create_pipe(Process_Handle *process) {
+    return 1; // giving up actually handling stdout for now. I have to think how to do it
+
     char pipe_name[256] = {0};
     sprintf(pipe_name, "\\\\.\\pipe\\Pipe%08x", GetCurrentProcessId());
-    
+
     SECURITY_ATTRIBUTES attr = {0};
     attr.nLength = sizeof(attr);
     attr.bInheritHandle = TRUE;
     attr.lpSecurityDescriptor = NULL;
-
+    
     HANDLE read = CreateNamedPipe(pipe_name,
-                                   PIPE_ACCESS_INBOUND | FILE_FLAG_OVERLAPPED,
-                                   PIPE_TYPE_BYTE      | PIPE_NOWAIT,
+                                   PIPE_ACCESS_INBOUND,
+                                   PIPE_TYPE_BYTE | PIPE_WAIT,
                                    1,
-                                   4096,
-                                   4096,
+                                   1024,
+                                   1024,
                                    4 * 1000,
                                    &attr);
 
     if (read == INVALID_HANDLE_VALUE) {
-        printf("failed to create read pipe.\n");
-        return 0;
-    }
-
-    HANDLE write = CreateFile(pipe_name,
-                              GENERIC_WRITE,
-                              0,
-                              &attr,
-                              OPEN_EXISTING,
-                              FILE_ATTRIBUTE_NORMAL | FILE_FLAG_OVERLAPPED,
-                              NULL);
-
-    if (write == INVALID_HANDLE_VALUE) {
-        printf("failed to create write pipe.\n");
-        CloseHandle(read);
+        printf("failed to create read pipe. Num: %d\n", GetLastError());
         return 0;
     }
 
     if (!SetHandleInformation(read, HANDLE_FLAG_INHERIT, 0)) {
         printf("failed to set-up information for a pipe.\n");
         CloseHandle(read);
-        CloseHandle(write);
         return 0;
     }
 
-    *read_out  = read;
-    *write_out = write;
+    process->read_pipe  = read;
+
+    HANDLE write = CreateFile(pipe_name,
+                              GENERIC_WRITE,
+                              0,
+                              &attr,
+                              OPEN_EXISTING,
+                              FILE_FLAG_NO_BUFFERING | FILE_FLAG_WRITE_THROUGH,
+                              NULL);
+
+    if (write == INVALID_HANDLE_VALUE) {
+        printf("failed to create write pipe. Num: %d\n", GetLastError());
+        CloseHandle(process->read_pipe);
+        process->read_pipe = 0;
+        return 0;
+    }
+
+    process->write_pipe = write;
 
     return 1;
+}
+
+void close_pipe(Process_Handle *process) {
+    return; // giving up actually handling stdout for now. I have to think how to do it
+
+    CloseHandle(process->read_pipe);
+    process->read_pipe  = 0;
+
+    CloseHandle(process->write_pipe);
+    process->write_pipe = 0;
 }
 
 Process_Handle create_process_handle() {
     Process_Handle handle = {0};
     ZeroMemory(&handle.procinfo, sizeof(PROCESS_INFORMATION));
-
-    SECURITY_ATTRIBUTES attr = {0};
-    attr.nLength = sizeof(attr);
-    attr.bInheritHandle = TRUE;
-    attr.lpSecurityDescriptor = NULL;
-    // if (!create_my_own_pipe(&handle.read_pipe, &handle.write_pipe)) {
-    //     printf("Error: failed to create a pipe.\n");
-    //     return handle;
-    // }
 
     handle.valid = 1;
     return handle;
@@ -84,8 +88,7 @@ Process_Handle create_process_handle() {
 
 void destroy_handle(Process_Handle *handle) {
     terminate_process(handle);
-    // CloseHandle(handle.read_pipe);
-    // CloseHandle(handle.write_pipe);
+    close_pipe(handle);
 }
 
 char *strsep(char **stringp, const char *delim) {
@@ -163,12 +166,17 @@ void restart_process(const char *command, Process_Handle *handle, Log_Buffer *bu
     start_process(command, handle, buffer);
 }
 
-void start_process(const char *command, Process_Handle *handle, Log_Buffer *buffer) {
-    STARTUPINFO info;
-    ZeroMemory(&info, sizeof(STARTUPINFO));
+int32_t start_process(const char *command, Process_Handle *handle, Log_Buffer *buffer) {
+    // if(!create_pipe(handle)) {
+    //     printf("Failed to start a process.\n");
+    //     return 0;
+    // }
+
+    STARTUPINFO info = {0};
     info.cb = sizeof(info);
-    // info.hStdOutput = handle->write_pipe;
-    // info.dwFlags    = STARTF_USESTDHANDLES;
+    // standard_info->hStdOutput = handle->write_pipe;
+    // standard_info->dwFlags    = STARTF_USESTDHANDLES;
+    BOOL inherit_pipe = FALSE;
 
     TCHAR process_command[1024] = {0};
     ua_tcscpy_s(process_command, sizeof(process_command), command);
@@ -176,7 +184,7 @@ void start_process(const char *command, Process_Handle *handle, Log_Buffer *buff
                                  process_command,
                                  NULL,
                                  NULL,
-                                 FALSE,
+                                 inherit_pipe,
                                  0,
                                  NULL,
                                  NULL,
@@ -186,57 +194,67 @@ void start_process(const char *command, Process_Handle *handle, Log_Buffer *buff
     if (created == 0) {
         printf("error code: %d\n", GetLastError());
         ZeroMemory(&handle->procinfo, sizeof(handle->procinfo));
+        return 0;
     }   
 
     // CloseHandle(handle->write_pipe);
-    // printf("Closed Write end of handle.\n");
-    return;
+    return 1;
 }
 
 void handle_stdout_for_process(Process_Handle *process, Log_Buffer *log_buffer) {
+    return; // giving up actually handling stdout for now. I have to think how to do it
+
     if (!is_process_running(process)) return;
 
     // DWORD current_pipe_occupied_amount = 0;
-    // BOOL peeked_pipe = PeekNamedPipe(process->read_pipe, NULL, 0, NULL, &current_pipe_occupied_amount, NULL);
     char buffer[1024] = {0};
-    DWORD bytes_read;
+    DWORD bytes_read = 0;
+    DWORD read = 0;
 
-    BOOL succeed = ReadFile(process->read_pipe, &buffer, 1023, &bytes_read, NULL);
+    BOOL succeed = ReadFile(process->read_pipe, &buffer[bytes_read], 1, &read, 0);
 
-    if (succeed == 0) {
-        printf("Could not peek the pipe: %d\n", GetLastError());
-        return;
-    }
+    while (succeed && read > 0) {
+        // while((bytes_read + log_buffer->used) > log_buffer->capacity) {
+        //     void *new_buffer = realloc(log_buffer->buffer_ptr, log_buffer->capacity * 2);
+        //     assert(new_buffer && "failed to realloc new buffer.");
 
-    printf("Occupied amount: %d\n", bytes_read);
-    while (succeed != 0 && bytes_read > 0) {
-        while((bytes_read + log_buffer->used) > log_buffer->capacity) {
-            void *new_buffer = realloc(log_buffer->buffer_ptr, log_buffer->capacity * 2);
-            assert(new_buffer && "failed to realloc new buffer.");
+        //     log_buffer->buffer_ptr = (char *)new_buffer;
+        //     log_buffer->capacity   = log_buffer->capacity * 2;
+        // }
 
-            log_buffer->buffer_ptr = (char *)new_buffer;
-            log_buffer->capacity   = log_buffer->capacity * 2;
+
+        // int begin = 0, end = 0;
+        // for (; end < bytes_read; ++end) {
+        //     if (buffer[end] == '\n') {
+        //         strncat(log_buffer->buffer_ptr, &buffer[begin],(end + 1) - begin);
+        //         printf("[Logs] %s", log_buffer->buffer_ptr);
+        //         
+        //         memset(log_buffer->buffer_ptr, 0, log_buffer->capacity);
+        //         log_buffer->used = 0;
+        //         begin = end + 1;
+        //     }
+        // }
+
+        // if (begin != end) {
+        //     strncat(log_buffer->buffer_ptr, &buffer[begin], end - begin);
+        //     log_buffer->used += end - begin;
+        // }
+
+
+        if (buffer[bytes_read] == '\n') {
+            buffer[bytes_read + 1] = '\0';
+            printf("[Logs] %s", buffer);
+            memset(buffer, 0, sizeof(buffer));
+            bytes_read = 0;
+        } else {
+            bytes_read += read;
         }
 
-        int begin = 0, end = 0;
-        for (; end < bytes_read; ++end) {
-            if (buffer[end] == '\n') {
-                strncat(log_buffer->buffer_ptr, &buffer[begin],(end + 1) - begin);
-                printf("[Logs] %s", log_buffer->buffer_ptr);
-                
-                memset(log_buffer->buffer_ptr, 0, log_buffer->capacity);
-                log_buffer->used = 0;
-                begin = end + 1;
-            }
+        if (bytes_read < sizeof(buffer)) {
+            succeed = ReadFile(process->read_pipe, &buffer[bytes_read], 1, &read, 0);
+        } else {
+            succeed = 0;
         }
-
-        if (begin != end) {
-            strncat(log_buffer->buffer_ptr, &buffer[begin], end - begin);
-            log_buffer->used += end - begin;
-        }
-
-        memset(buffer, 0, sizeof(buffer));
-        succeed = ReadFile(process->read_pipe, &buffer, 1023, &bytes_read, 0);
     }
 }
 

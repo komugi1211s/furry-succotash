@@ -131,13 +131,17 @@ void process_gui(Succotash *succotash, mu_Context *ctx) {
     mu_begin(ctx);
     int32_t process_is_running = is_process_running(&succotash->handle); // just for display!
 
+
     if (mu_begin_window_ex(ctx, "Base_Window", mu_rect(0, 0, 350, 300), MU_OPT_NOTITLE | MU_OPT_NORESIZE | MU_OPT_NOCLOSE)) {
         int row[] = { 80, -1 };
         mu_layout_row(ctx, 2, row, 25);
-        if(mu_button(ctx, "Start/Stop")) {
+        int32_t option_for_running_button = (succotash->folder_is_invalid) ? MU_OPT_NOINTERACT : 0;
+        if(mu_button_ex(ctx, "Start/Stop", 0, option_for_running_button)) {
             if (!process_is_running) {
+                close_pipe(&succotash->handle);
                 start_process(succotash->command, &succotash->handle, NULL);
             } else {
+                close_pipe(&succotash->handle);
                 terminate_process(&succotash->handle);
             }
         }
@@ -242,6 +246,7 @@ int main(int argc, char **argv) {
             }
         }
 
+        handle_stdout_for_process(&succotash->handle, NULL);
         if (!succotash->folder_is_invalid) {
             uint64_t current_latest_modified_time = find_latest_modified_time((char *)succotash->directory);
 
@@ -251,6 +256,7 @@ int main(int argc, char **argv) {
                 
                 if (!process_is_alive) {
                     terminate_process(&succotash->handle); // just in case;
+                    close_pipe(&succotash->handle); // just in case;
                     start_process(succotash->command, &succotash->handle, &buffer);
                 } else {
                     restart_process(succotash->command, &succotash->handle, &buffer);
@@ -261,7 +267,6 @@ int main(int argc, char **argv) {
             }
         }
 
-        // not working now.
         process_event(succotash, ctx);
         process_gui(succotash, ctx);
         render_gui(succotash, ctx);
