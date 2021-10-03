@@ -47,8 +47,24 @@ struct Succotash {
     char directory[256];
     char command[256];
 
+    Logger     logger;
     Process_Handle handle;
 };
+
+
+void watcher_log(Logger *logger, char *message, ...) {
+    size_t new_buffer_index = logger->logs_end;
+    char *buf = logger->logs[new_buffer_index];
+    memset(buf, 0, LOG_BUFFER_LINE_SIZE);
+
+    va_list list;
+    va_start(list, message);
+    vsnprintf(buf, LOG_BUFFER_LINE_SIZE, message, list);
+    va_end(list);
+
+    logger->logs_end = (logger->logs_end + 1) % LOG_BUFFER_BUCKET_SIZE;
+    if (logger->logs_end == logger->logs_begin) logger->logs_begin = (logger->logs_begin + 1) % LOG_BUFFER_BUCKET_SIZE;
+}
 
 char sdlk_to_microui_key(SDL_Keycode sym) {
     switch(sym) {
@@ -133,19 +149,24 @@ void process_gui(Succotash *succotash, mu_Context *ctx) {
 
 
     if (mu_begin_window_ex(ctx, "Base_Window", mu_rect(0, 0, 350, 300), MU_OPT_NOTITLE | MU_OPT_NORESIZE | MU_OPT_NOCLOSE)) {
-        int row[] = { 80, -1 };
-        mu_layout_row(ctx, 2, row, 25);
+        int row[] = { 80, 80, 80 };
+        mu_layout_row(ctx, 3, row, 0);
         int32_t option_for_running_button = (succotash->folder_is_invalid) ? MU_OPT_NOINTERACT : 0;
         if(mu_button_ex(ctx, "Start/Stop", 0, option_for_running_button)) {
             if (!process_is_running) {
+                watcher_log(&succotash->logger, "Running a process...");
                 close_pipe(&succotash->handle);
-                start_process(succotash->command, &succotash->handle, NULL);
+                start_process(succotash->command, &succotash->handle, &succotash->logger);
             } else {
+                watcher_log(&succotash->logger, "Restarting a process...");
                 close_pipe(&succotash->handle);
                 terminate_process(&succotash->handle);
             }
         }
-        mu_checkbox_ex(ctx, "Running", &process_is_running, MU_OPT_NOINTERACT);
+        mu_checkbox_ex(ctx, "Running",  &process_is_running,           MU_OPT_NOINTERACT);
+
+        int32_t folder_is_not_invalid = !succotash->folder_is_invalid;
+        mu_checkbox_ex(ctx, "Watching", &folder_is_not_invalid, MU_OPT_NOINTERACT);
 
         // ============ Command Window ============ 
         int row2[] = { 80, -1 };
@@ -169,15 +190,26 @@ void process_gui(Succotash *succotash, mu_Context *ctx) {
 
         // ============ Status Window ============ 
         int full_row[] = { -1 };
-        mu_layout_row(ctx, 1, full_row, 25);
-        if (succotash->folder_is_invalid) {
-            mu_label(ctx, "Folder is Invalid.");
-        } else {
-            char log_buffer[2048] = {0};
-            snprintf(log_buffer, sizeof(log_buffer), "Last File Modified Time: %" PRIu64 "", succotash->last_modified_time);
-            mu_label(ctx, log_buffer);
+        mu_layout_row(ctx, 1, full_row, -1);
+        mu_begin_panel(ctx, "Logs");
+        mu_layout_row(ctx, 1, full_row, r_get_text_height());
+        size_t begin = succotash->logger.logs_begin;
+        size_t end   = succotash->logger.logs_end;
+
+        static size_t static_end = 0;
+        if (succotash->logger.logs_end != static_end) {
+            static_end = succotash->logger.logs_end;
+            mu_Container *container = mu_get_current_container(ctx);
+            container->scroll.y = container->content_size.y;
         }
 
+        for (size_t i = begin; i != end; i = (i + 1) % LOG_BUFFER_BUCKET_SIZE) {
+            char buffer[LOG_BUFFER_LINE_SIZE + 256] = {0};
+            snprintf(buffer, LOG_BUFFER_LINE_SIZE + 256, "[LOG] %s", succotash->logger.logs[i]);
+            mu_text(ctx, buffer);
+        }
+
+        mu_end_panel(ctx);
         mu_end_window(ctx);
     }
 
@@ -190,16 +222,12 @@ void render_gui(Succotash *succotash, mu_Context *ctx) {
     while (mu_next_command(ctx, &cmd)) {
         switch (cmd->type) {
             case MU_COMMAND_TEXT: r_draw_text(cmd->text.str, cmd->text.pos, cmd->text.color); break;
-            case MU_COMMAND_RECT: r_draw_rect(cmd->rect.rect, cmd->rect.color); break;
+            case MU_COMMAND_RECT: r_draw_rect(cmd->rect.rect, cmd->rect.color);               break;
             case MU_COMMAND_ICON: r_draw_icon(cmd->icon.id, cmd->icon.rect, cmd->icon.color); break;
-            case MU_COMMAND_CLIP: r_set_clip_rect(cmd->clip.rect); break;
+            case MU_COMMAND_CLIP: r_set_clip_rect(cmd->clip.rect);                            break;
         }
     }
     r_present();
-}
-
-void testing_threads(void *ptrs) {
-    printf("Hello from thread!\n");
 }
 
 int main(int argc, char **argv) {
@@ -219,22 +247,19 @@ int main(int argc, char **argv) {
     strcat(succotash->directory, "./src");
     strcat(succotash->command,   "./test_printing_process.exe");
 
+    to_full_paths(succotash->directory, sizeof(succotash->directory));
+    to_full_paths(succotash->command,   sizeof(succotash->command));
+
     succotash->handle             = create_process_handle();
-    succotash->last_modified_time = find_latest_modified_time((char *)succotash->directory);
+    succotash->last_modified_time = find_latest_modified_time(&succotash->logger, (char *)succotash->directory);
     succotash->folder_is_invalid  = succotash->last_modified_time == 0;
+    watcher_log(&succotash->logger, "Waiting.");
 
     if (!succotash->handle.valid) {
         printf("Failed to start a program.\n");
         return 0;
     }
 
-    // Buffer.
-    Log_Buffer buffer = {0};
-    // buffer.buffer_ptr = (char *)malloc(sizeof(char) * 4096);
-    // buffer.capacity   = sizeof(char) * 4096;
-    // buffer.used       = 0;
-
-    // memset(buffer.buffer_ptr, 0, sizeof(char) * 4096);
     int32_t process_was_alive_previous_frame = 0;
 
     succotash->running = 1;
@@ -242,27 +267,27 @@ int main(int argc, char **argv) {
         int32_t process_is_alive = is_process_running(&succotash->handle);
         if (!process_is_alive) { 
             if (process_was_alive_previous_frame) {
-                printf("Process Died! waiting to restart...\n");
+                watcher_log(&succotash->logger, "process exited. waiting for restart(press start stop or modify content in watch folder.)");
             }
         }
 
         handle_stdout_for_process(&succotash->handle, NULL);
         if (!succotash->folder_is_invalid) {
-            uint64_t current_latest_modified_time = find_latest_modified_time((char *)succotash->directory);
+            uint64_t current_latest_modified_time = find_latest_modified_time(&succotash->logger, (char *)succotash->directory);
 
             if (current_latest_modified_time > succotash->last_modified_time) {
-                printf("files changed! restarting... \n");
+                watcher_log(&succotash->logger, "File change detected (timestamp %" PRIu64 "). restarting a process", current_latest_modified_time);
                 succotash->last_modified_time = current_latest_modified_time;
                 
                 if (!process_is_alive) {
                     terminate_process(&succotash->handle); // just in case;
                     close_pipe(&succotash->handle); // just in case;
-                    start_process(succotash->command, &succotash->handle, &buffer);
+                    start_process(succotash->command, &succotash->handle, &succotash->logger);
                 } else {
-                    restart_process(succotash->command, &succotash->handle, &buffer);
+                    restart_process(succotash->command, &succotash->handle, &succotash->logger);
                 }
             } else if (current_latest_modified_time == 0) {
-                printf("Folder became invalid. disabling restart \n");
+                watcher_log(&succotash->logger, "Folder %s became invalid. disabling restart.", succotash->directory);
                 succotash->folder_is_invalid = 1;
             }
         }
@@ -275,7 +300,6 @@ int main(int argc, char **argv) {
     }  
     
     destroy_handle(&succotash->handle);
-    // free(buffer.buffer_ptr);
     free(ctx);
     free(succotash);
     return 0;

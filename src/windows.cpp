@@ -156,17 +156,17 @@ void terminate_process(Process_Handle *process) { // try to terminate the proces
     CloseHandle(process->procinfo.hThread);
 }
 
-void restart_process(const char *command, Process_Handle *handle, Log_Buffer *buffer) {
+void restart_process(const char *command, Process_Handle *handle, Logger *logger) {
     assert(is_process_running(handle) && "Process is not running");
     terminate_process(handle);
 
     assert(!is_process_running(handle) && "Process is still runnning despite of terminate process");
     ZeroMemory(&handle->procinfo, sizeof(handle->procinfo));
 
-    start_process(command, handle, buffer);
+    start_process(command, handle, logger);
 }
 
-int32_t start_process(const char *command, Process_Handle *handle, Log_Buffer *buffer) {
+int32_t start_process(const char *command, Process_Handle *handle, Logger *logger) {
     // if(!create_pipe(handle)) {
     //     printf("Failed to start a process.\n");
     //     return 0;
@@ -192,7 +192,7 @@ int32_t start_process(const char *command, Process_Handle *handle, Log_Buffer *b
                                  &handle->procinfo);
 
     if (created == 0) {
-        printf("error code: %d\n", GetLastError());
+        watcher_log(logger, "Failed to run process: GetLastError() = %d", GetLastError());
         ZeroMemory(&handle->procinfo, sizeof(handle->procinfo));
         return 0;
     }   
@@ -201,7 +201,7 @@ int32_t start_process(const char *command, Process_Handle *handle, Log_Buffer *b
     return 1;
 }
 
-void handle_stdout_for_process(Process_Handle *process, Log_Buffer *log_buffer) {
+void handle_stdout_for_process(Process_Handle *process, Logger *Logger) {
     return; // giving up actually handling stdout for now. I have to think how to do it
 
     if (!is_process_running(process)) return;
@@ -214,30 +214,30 @@ void handle_stdout_for_process(Process_Handle *process, Log_Buffer *log_buffer) 
     BOOL succeed = ReadFile(process->read_pipe, &buffer[bytes_read], 1, &read, 0);
 
     while (succeed && read > 0) {
-        // while((bytes_read + log_buffer->used) > log_buffer->capacity) {
-        //     void *new_buffer = realloc(log_buffer->buffer_ptr, log_buffer->capacity * 2);
+        // while((bytes_read + Logger->used) > Logger->capacity) {
+        //     void *new_buffer = realloc(Logger->buffer_ptr, Logger->capacity * 2);
         //     assert(new_buffer && "failed to realloc new buffer.");
 
-        //     log_buffer->buffer_ptr = (char *)new_buffer;
-        //     log_buffer->capacity   = log_buffer->capacity * 2;
+        //     Logger->buffer_ptr = (char *)new_buffer;
+        //     Logger->capacity   = Logger->capacity * 2;
         // }
 
 
         // int begin = 0, end = 0;
         // for (; end < bytes_read; ++end) {
         //     if (buffer[end] == '\n') {
-        //         strncat(log_buffer->buffer_ptr, &buffer[begin],(end + 1) - begin);
-        //         printf("[Logs] %s", log_buffer->buffer_ptr);
+        //         strncat(Logger->buffer_ptr, &buffer[begin],(end + 1) - begin);
+        //         printf("[Logs] %s", Logger->buffer_ptr);
         //         
-        //         memset(log_buffer->buffer_ptr, 0, log_buffer->capacity);
-        //         log_buffer->used = 0;
+        //         memset(Logger->buffer_ptr, 0, Logger->capacity);
+        //         Logger->used = 0;
         //         begin = end + 1;
         //     }
         // }
 
         // if (begin != end) {
-        //     strncat(log_buffer->buffer_ptr, &buffer[begin], end - begin);
-        //     log_buffer->used += end - begin;
+        //     strncat(Logger->buffer_ptr, &buffer[begin], end - begin);
+        //     Logger->used += end - begin;
         // }
 
 
@@ -325,13 +325,24 @@ void select_file(char *file_buffer, size_t file_buffer_size) {
     }
 }
 
-uint64_t find_latest_modified_time(char *filepath) {
+void to_full_paths(char *path_buffer, size_t path_buffer_size) {
+    char *buffer = (char *)VirtualAlloc(0, path_buffer_size+1, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
+    strncpy(buffer, path_buffer, path_buffer_size);
+
+    GetFullPathName(buffer, path_buffer_size, path_buffer, 0);
+    path_buffer[path_buffer_size-1] = 0;
+
+    VirtualFree(buffer, 0, MEM_RELEASE);
+}
+
+
+uint64_t find_latest_modified_time(Logger *logger, char *filepath) {
     if (is_forbidden_path(filepath)) return 0;
     WIN32_FIND_DATA data = {0};
     HANDLE handle = FindFirstFile(filepath, &data);
 
     if (handle == INVALID_HANDLE_VALUE) {
-        printf("File %s is invalid\n", filepath);
+        watcher_log(logger, "Failed to find a folder: attempt to open %s resulted in INVALID_HANDLE_VALUE", filepath);
         return 0;
     }
 
@@ -347,7 +358,7 @@ uint64_t find_latest_modified_time(char *filepath) {
             if (!is_forbidden_path(dir_data.cFileName)) {
                 memset(dir_search_term, 0, sizeof(dir_search_term));
                 snprintf(dir_search_term, sizeof(dir_search_term), "%s\\%s", filepath, dir_data.cFileName);
-                uint64_t write_time_for_given_file = find_latest_modified_time(dir_search_term);
+                uint64_t write_time_for_given_file = find_latest_modified_time(logger, dir_search_term);
 
                 if (write_time_for_given_file > result) {
                     result = write_time_for_given_file;

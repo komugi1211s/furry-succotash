@@ -10,12 +10,12 @@
 // Process handling.
 
 struct Process_Handle;
-struct Log_Buffer;
+struct Logger;
 Process_Handle create_process_handle();
 char *separate_command_to_executable_and_args(const char *in, char *out_arg_list[], size_t arg_capacity);
 
-int32_t start_process(const char *command, Process_Handle *handle, Log_Buffer *buffer);
-int32_t restart_process(Process_Handle *handle, Log_Buffer *buffer);
+int32_t start_process(const char *command, Process_Handle *handle, Logger *logger);
+int32_t restart_process(Process_Handle *handle, Logger *logger);
 void terminate_process(Process_Handle *handle); // try to terminate the process whether it's alive or not.
 
 int  is_process_running(Process_Handle *handle);
@@ -28,29 +28,39 @@ void close_pipe(Process_Handle *handle);
 
 // ====================================
 // Threading.
-typedef struct Thread_Handle Thread_Handle;
-Thread_Handle start_stdout_thread(Process_Handle *handle, Log_Buffer *buffer);
-void handle_stdout_task(void *ptr);
 
+/*
+typedef struct Thread_Handle Thread_Handle;
+Thread_Handle start_stdout_thread(Process_Handle *handle, Logger *logger);
+void handle_stdout_task(void *ptr);
+*/
 
 // ====================================
 // Files.
 
-uint64_t find_latest_modified_time(char *path);
+uint64_t find_latest_modified_time(Logger *logger, char *path);
 void select_new_folder(char *folder_buffer, size_t folder_buffer_size);
+void select_file(char *file_buffer, size_t file_buffer_size);
+void to_full_paths(char *path_buffer, size_t path_buffer_size);
 
 // ====================================
 // Shared.
 
 typedef struct Thread_Handle Thread_Handle;
-typedef struct Succotash Succotash;
+typedef struct Succotash     Succotash;
 
-typedef struct Log_Buffer Log_Buffer;
+typedef struct Logger Logger;
 
-struct Log_Buffer {
-    char *buffer_ptr;
-    size_t capacity;
-    size_t used;
+#define LOG_BUFFER_LINE_SIZE   2048
+#define LOG_BUFFER_BUCKET_SIZE 256
+
+struct Logger {
+    char   logs[LOG_BUFFER_LINE_SIZE][LOG_BUFFER_BUCKET_SIZE];
+    size_t logs_begin;
+    size_t logs_end;
 };
+
+void watcher_log(Logger *logger, char *message, ...);
+void process_log(Logger *logger, char *message, ...);
 
 #endif

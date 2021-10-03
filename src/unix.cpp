@@ -31,7 +31,7 @@ struct Process_Handle {
 
 typedef struct {
     int read_fd;
-    Log_Buffer *output;
+    Logger *output;
 } Thread_Info;
 
 // ====================================
@@ -63,7 +63,7 @@ char *separate_command_to_executable_and_args(const char *in, char *out_arg_list
     return executable_command;
 }
 
-void start_process(Process_Handle *handle, Log_Buffer *buffer) {
+void start_process(Process_Handle *handle, Logger *logger) {
     // Create Argument list.
 
     if (!create_pipe(handle)) {
@@ -110,7 +110,7 @@ void start_process(Process_Handle *handle, Log_Buffer *buffer) {
     return;
 }
 
-void restart_process(Process_Handle *handle, Log_Buffer *buffer) {
+void restart_process(Process_Handle *handle, Logger *logger) {
     if (handle->child_pid == 0 || handle->child_pid == -1) return;
 
     kill(handle->child_pid, SIGTERM);
@@ -130,7 +130,7 @@ int is_process_running(Process_Handle *handle) {
 
 typedef struct {
     Process_Handle *handle;
-    Log_Buffer *buffer;
+    Logger *logger;
 } stdout_task_thr_info;
 
 void handle_stdout_for_process(void *ptr) {
@@ -138,7 +138,7 @@ void handle_stdout_for_process(void *ptr) {
     delete (stdout_task_thr_info *)(ptr);
 
     Process_Handle *handle = info.handle;
-    Log_Buffer *log_buffer = info.buffer;
+    Logger *Logger = info.buffer;
     handle->child_pid = -1;
 
     return;
@@ -156,12 +156,12 @@ void handle_stdout_for_process(void *ptr) {
 
     while (read_amount > 0) {
         // Extend buffer accordingly.
-        while((log_buffer->used + read_amount) > log_buffer->capacity) {
-            char *new_ptr = (char *)realloc(log_buffer->buffer_ptr, log_buffer->capacity * 2);
+        while((Logger->used + read_amount) > Logger->capacity) {
+            char *new_ptr = (char *)realloc(Logger->buffer_ptr, Logger->capacity * 2);
             assert(new_ptr && "Realloc failed, shouldn't continue.");
 
-            log_buffer->buffer_ptr = new_ptr;
-            log_buffer->capacity   = log_buffer->capacity * 2;
+            Logger->buffer_ptr = new_ptr;
+            Logger->capacity   = Logger->capacity * 2;
         }
 
         // Finding a Newline.
@@ -178,18 +178,18 @@ void handle_stdout_for_process(void *ptr) {
 
         // Write into stdout if you've found a newline.
         if (found_newline_index > 0) {
-            strncat(log_buffer->buffer_ptr, reading_ptr, found_newline_index + 1);
-            printf("[Logs] %s", log_buffer->buffer_ptr);
+            strncat(Logger->buffer_ptr, reading_ptr, found_newline_index + 1);
+            printf("[Logs] %s", Logger->buffer_ptr);
             reading_ptr += found_newline_index;
             read_amount -= found_newline_index;
 
-            memset(log_buffer->buffer_ptr, 0, log_buffer->capacity);
-            log_buffer->used = 0;
+            memset(Logger->buffer_ptr, 0, Logger->capacity);
+            Logger->used = 0;
         }
 
         // Concatenate the rest.
-        strcat(log_buffer->buffer_ptr, reading_ptr);
-        log_buffer->used += read_amount;
+        strcat(Logger->buffer_ptr, reading_ptr);
+        Logger->used += read_amount;
 
         memset(message, 0, sizeof(message));
         read_amount_or_error = read(handle->reading_pipe[0], &message, sizeof(message)-1);
@@ -253,7 +253,7 @@ void *stdout_task(void *arg) {
     return NULL;
 }
 
-Thread_Handle start_stdout_thread(Process_Handle *handle, Log_Buffer *buffer) {
+Thread_Handle start_stdout_thread(Process_Handle *handle, Logger *logger) {
     Thread_Handle thread = {0};
 
     stdout_task_thr_info *i = new stdout_task_thr_info;
