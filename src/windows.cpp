@@ -3,12 +3,12 @@
 #include <Windows.h>
 #include "main.h"
 
-struct Thread_Handle {
+struct Thread_Handle { // TODO: unused
     HANDLE inner;
 };
 
 struct Process_Handle {
-    int32_t valid;
+    int32_t valid; // TODO: unused
     PROCESS_INFORMATION procinfo;
 
     HANDLE read_pipe;
