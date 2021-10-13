@@ -15,7 +15,7 @@
 
 struct Process_Handle {
     int32_t valid; // todo: unused
-    int child_pid;
+    pid_t child_pid;
     int reading_pipe[2];
 };
 
@@ -58,7 +58,7 @@ int32_t start_process(const char *command, Process_Handle *handle, Logger *logge
 
     char *arg_list[32] = {0};
     char *exec_command = separate_command_to_executable_and_args(command, arg_list, 32);
-    int pid = fork();
+    pid_t pid = fork();
     int err = errno;
 
     switch(pid) {
@@ -118,16 +118,26 @@ int is_process_running(Process_Handle *handle) {
 
     int status = 0;
     int result = waitpid(handle->child_pid, &status, WNOHANG);
+    int err = errno;
 
     if (result == -1) {
+        if (err == ECHILD) {
+            // meaning the child is already dead.
+            handle->child_pid = -1;
+            return 0;
+        }
         return 1; // Just assume that process is still running if it returns an error
+    }
+
+    if (result == 0) {
+        // Child process exists, but has no status change; assume it's working.
+        return 1;
     }
 
     if (WIFEXITED(status)) {
         handle->child_pid = -1;
         return 0;
     }
-    
     return 1;
 }
 
