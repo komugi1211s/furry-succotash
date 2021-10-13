@@ -104,7 +104,22 @@ int32_t start_process(const char *command, Process_Handle *handle, Logger *logge
 
 void terminate_process(Process_Handle *handle) {
     if (handle->child_pid == 0 || handle->child_pid == -1) return;
-    kill(handle->child_pid, SIGTERM);
+    int kill_result = kill(handle->child_pid, SIGTERM);
+    int err = errno;
+    if (kill_result == -1) {
+        fprintf(stderr, "Failed to kill a process. error: %d\n", err);
+        exit(EXIT_FAILURE);
+    }
+
+    int status;
+    int wait_result = waitpid(handle->child_pid, &status, 0);
+    int werr = errno;
+
+    if (wait_result == -1) {
+        fprintf(stderr, "Failed to wait a process. error: %d\n", werr);
+        exit(EXIT_FAILURE);
+    }
+
     handle->child_pid = -1;
 }
 
@@ -134,7 +149,7 @@ int is_process_running(Process_Handle *handle) {
         return 1;
     }
 
-    if (WIFEXITED(status)) {
+    if (WIFEXITED(status) || WIFSIGNALED(status)) {
         handle->child_pid = -1;
         return 0;
     }
