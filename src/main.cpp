@@ -150,8 +150,8 @@ void process_gui(Succotash *succotash, mu_Context *ctx) {
     if (mu_begin_window_ex(ctx, "Base_Window", mu_rect(0, 0, 350, 300), MU_OPT_NOTITLE | MU_OPT_NORESIZE | MU_OPT_NOCLOSE)) {
         int row[] = { 80, 80, 80 };
         mu_layout_row(ctx, 3, row, 0);
-        int32_t option_for_running_button = (succotash->folder_is_invalid) ? MU_OPT_NOINTERACT : 0;
-        if(mu_button_ex(ctx, "Start/Stop", 0, option_for_running_button)) {
+        int32_t should_button_be_active = (succotash->folder_is_invalid) ? MU_OPT_NOINTERACT : 0;
+        if(mu_button_ex(ctx, "Start/Stop", 0, should_button_be_active)) {
             if (!process_is_running) {
                 close_pipe(&succotash->handle);
                 if (start_process(succotash->command, &succotash->handle, &succotash->logger)) {
@@ -275,7 +275,7 @@ int main(int argc, char **argv) {
         }
 
         // handle_stdout_for_process(&succotash->handle, NULL);
-        if (!succotash->folder_is_invalid) {
+        if (!succotash->folder_is_invalid && process_is_alive) {
             uint64_t current_latest_modified_time = find_latest_modified_time(&succotash->logger, (char *)succotash->directory);
 
             if (current_latest_modified_time > succotash->last_modified_time) {
