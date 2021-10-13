@@ -39,9 +39,9 @@ void handle_stdout_task(void *ptr);
 // Files.
 
 uint64_t find_latest_modified_time(Logger *logger, char *path);
-void select_new_folder(char *folder_buffer, size_t folder_buffer_size);
-void select_file(char *file_buffer, size_t file_buffer_size);
-void to_full_paths(char *path_buffer, size_t path_buffer_size);
+int32_t select_new_folder(char *folder_buffer, size_t folder_buffer_size);
+int32_t select_file(char *file_buffer, size_t file_buffer_size);
+int32_t to_full_paths(char *path_buffer, size_t path_buffer_size);
 
 // ====================================
 // Shared.

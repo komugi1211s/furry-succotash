@@ -44,8 +44,8 @@ struct Succotash {
     uint64_t last_modified_time;
 
     int32_t folder_is_invalid;
-    char directory[256];
-    char command[256];
+    char directory[512];
+    char command[512];
 
     Logger     logger;
     Process_Handle handle;
@@ -175,8 +175,11 @@ void process_gui(Succotash *succotash, mu_Context *ctx) {
         option |= (process_is_running) ? MU_OPT_NOINTERACT : 0;
 
         if(mu_button_ex(ctx, "Directory", 0, option)) {
-            select_new_folder(succotash->directory, sizeof(succotash->directory));
-            succotash->folder_is_invalid = 0;
+            if(select_new_folder(succotash->directory, sizeof(succotash->directory))) {
+                succotash->folder_is_invalid = 0;
+            } else {
+                watcher_log(&succotash->logger, "Failed to choose a file.");
+            }
         }
 
         if(mu_textbox_ex(ctx, succotash->directory, sizeof(succotash->directory), option) & MU_RES_SUBMIT) {

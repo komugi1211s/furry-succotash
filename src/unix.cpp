@@ -3,6 +3,7 @@
 /* ======================= */
 #include <sys/stat.h>
 #include <sys/wait.h>
+#include <stdio.h>
 #include <errno.h>
 #include <dirent.h>
 #include <pthread.h>
@@ -50,8 +51,7 @@ char *separate_command_to_executable_and_args(const char *in, char *out_arg_list
 }
 
 int32_t start_process(const char *command, Process_Handle *handle, Logger *logger) {
-    // Create Argument list.
-    // if (!create_pipe(handle)) {
+    // Create Argument list.  if (!create_pipe(handle)) {
     //     watcher_log(logger, "Failed to create a pipe.");
     //     return 0;
     // }
@@ -131,13 +131,45 @@ int is_process_running(Process_Handle *handle) {
     return 1;
 }
 
-void select_new_folder(char *folder_buffer, size_t folder_buffer_size) {
+
+int32_t zenity_to_select_file_or_folder(char *outbuf, size_t outbuf_size, int32_t folder_selection) {
+    if (outbuf_size < 512) {
+        return 0;
+    }
+
+    char buffer[512] = {0};
+    FILE *zenity = 0;
+    if (folder_selection) {
+        zenity = popen("zenity --file-selection --directory --title=\"Select a Folder...\"", "r");
+    } else {
+        zenity = popen("zenity --file-selection --title=\"Select a File...\"", "r");
+    }
+
+    if (zenity) {
+        fread(buffer, 511, 1, zenity);
+        pclose(zenity);
+        memset(outbuf, 0, outbuf_size);
+        memcpy(outbuf, buffer, 512);
+
+        size_t last_char = strlen(outbuf);
+        if(outbuf[last_char - 1] == '\n') {
+            outbuf[last_char - 1] = '\0';
+        }
+        return 1;
+    }
+    return 0;
 }
 
-void select_file(char *file_buffer, size_t file_buffer_size) {
+int32_t select_new_folder(char *folder_buffer, size_t folder_buffer_size) {
+    return zenity_to_select_file_or_folder(folder_buffer, folder_buffer_size, 1);
 }
 
-void to_full_paths(char *paths_buffer, size_t paths_buffer_size) {
+int32_t select_file(char *file_buffer, size_t file_buffer_size) {
+    return zenity_to_select_file_or_folder(file_buffer, file_buffer_size, 0);
+}
+
+int32_t to_full_paths(char *paths_buffer, size_t paths_buffer_size) {
+    return 1;
 }
 
 
