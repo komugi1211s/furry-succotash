@@ -237,6 +237,7 @@ void render_gui(Succotash *succotash, mu_Context *ctx) {
 int main(int argc, char **argv) {
     SDL_Init(SDL_INIT_EVERYTHING);
     r_init();
+    platform_init();
 
     /* init microui */
     Succotash *succotash = (Succotash *)malloc(sizeof(Succotash));

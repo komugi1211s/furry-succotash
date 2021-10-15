@@ -15,6 +15,17 @@ struct Process_Handle {
     HANDLE write_pipe;
 };
 
+/*
+ *
+ * BIG TODO HERE
+ *
+ */
+int32_t platform_app_should_close() {
+    return 0;
+}
+void platform_init() {}
+
+
 int create_pipe(Process_Handle *process) {
     return 1; // giving up actually handling stdout for now. I have to think how to do it
 

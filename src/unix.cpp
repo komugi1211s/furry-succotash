@@ -19,6 +19,33 @@ struct Process_Handle {
     int reading_pipe[2];
 };
 
+volatile sig_atomic_t force_stop = 0;
+
+void handle_signal(int signal) {
+    force_stop = 1;
+}
+
+int32_t platform_app_should_close() {
+    return force_stop == 1;
+}
+
+void platform_init() {
+    struct sigaction action = {0};
+    action.sa_handler = handle_signal;
+    
+    if (sigaction(SIGINT, &action, NULL) == -1) {
+        int err = errno;
+        perror("failed on platform_init() -> sigaction(SIGINT...))");
+        fprintf(stderr, "failed on platform_init() -> sigaction(SIGINT...)): %s\n", strerror(err));
+        exit(EXIT_FAILURE);
+    }
+    if (sigaction(SIGTERM, &action, NULL) == -1) {
+        int err = errno;
+        perror("failed on platform_init() -> sigaction(SIGTERM...))");
+        fprintf(stderr, "failed on platform_init() -> sigaction(SIGTERM...)): %s\n", strerror(err));
+        exit(EXIT_FAILURE);
+    }
+}
 
 // ====================================
 // Process handling.
