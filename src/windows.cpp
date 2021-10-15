@@ -133,13 +133,12 @@ char *separate_command_to_executable_and_args(const char *in, char *out_arg_list
     size_t arg_count    = 0;
 
     char *executable_command = strsep(&current_ptr, " ");
-    if (!current_ptr) {
-        return executable_command;
-    }
 
-    for(;;) {
+    while(current_ptr && *current_ptr) {
         char *argument = strsep(&current_ptr, " ");
-        if (!current_ptr || !argument || arg_count >= arg_capacity) break;
+        if (!argument || arg_count >= arg_capacity)  {
+            break;
+        }
         out_arg_list[arg_count++] = argument;
     }
 

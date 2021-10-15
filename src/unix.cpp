@@ -35,15 +35,17 @@ void destroy_handle(Process_Handle *handle) {
     close_pipe(handle);
 }
 
-char *separate_command_to_executable_and_args(const char *in, char *out_arg_list[], size_t arg_capacity) {
+char *separate_command_to_executable_and_args(const char *in, char **out_arg_list, size_t arg_capacity) {
     char *copied_string = strdup(in);
     char *current_ptr   = copied_string;
     size_t arg_count    = 0;
 
     char *executable_command = strsep(&current_ptr, " ");
-    for(;;) {
+    while(current_ptr && *current_ptr) {
         char *argument = strsep(&current_ptr, " ");
-        if (!current_ptr || !argument || arg_count >= arg_capacity) break;
+        if (!argument || arg_count >= arg_capacity)  {
+            break;
+        }
         out_arg_list[arg_count++] = argument;
     }
 
@@ -58,6 +60,8 @@ int32_t start_process(const char *command, Process_Handle *handle, Logger *logge
 
     char *arg_list[32] = {0};
     char *exec_command = separate_command_to_executable_and_args(command, arg_list, 32);
+    printf("exec_command: %s\n", exec_command);
+    printf("arg-list: %s\n", arg_list[0]);
     pid_t pid = fork();
     int err = errno;
 
