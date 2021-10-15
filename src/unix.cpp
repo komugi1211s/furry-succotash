@@ -382,7 +382,7 @@ uint64_t find_latest_modified_time(Logger *logger, char *filepath) {
 
                 if (total_length < 1024) {
                     char new_filepath[1024] = {0};
-                    snprintf(new_filepath, 1024, "%s/%s", filepath, file_entry->d_name);
+                    snprintf(new_filepath, 1023, "%s/%s", filepath, file_entry->d_name);
                     uint64_t file_time = find_latest_modified_time(logger, new_filepath);
 
                     current_latest = (file_time > current_latest) ? file_time : current_latest;

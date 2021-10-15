@@ -273,10 +273,14 @@ SHBrowseProc(HWND hwnd, UINT umsg, LPARAM lParam, LPARAM lpData) {
     return 0;
 }
 
-void select_new_folder(char *folder_buffer, size_t folder_buffer_size) {
+int32_t select_new_folder(char *folder_buffer, size_t folder_buffer_size) {
+    if (file_buffer_size < MAX_PATH) {
+        return 0;
+    }
+
     BROWSEINFO info = {0};
     char buffer[MAX_PATH] = {0};
-    strncpy(buffer, folder_buffer, MAX_PATH);
+    strncpy(buffer, folder_buffer, MAX_PATH-1);
     
     info.hwndOwner = NULL;
     info.lpszTitle = "Select a target directory...";
@@ -295,16 +299,25 @@ void select_new_folder(char *folder_buffer, size_t folder_buffer_size) {
             allocator->Release();
         }
 
-        if (strlen(buffer) < folder_buffer_size) {
-            memset(folder_buffer, 0,folder_buffer_size);
-            strncpy(folder_buffer, buffer, strlen(buffer));
+        size_t buffer_string_length = strlen(buffer);
+        if (buffer_string_length < folder_buffer_size) {
+            memset(folder_buffer, 0, folder_buffer_size);
+            strncpy(folder_buffer, buffer, buffer_string_length);
+            return 1;
         }
+
+        return 0;
     }
+    return 0;
 }
 
-void select_file(char *file_buffer, size_t file_buffer_size) {
+int32_t select_file(char *file_buffer, size_t file_buffer_size) {
+    if (file_buffer_size < MAX_PATH) {
+        return 0;
+    }
+
     char buffer[MAX_PATH] = {0};
-    strncpy(buffer, file_buffer, MAX_PATH);
+    strncpy(buffer, file_buffer, MAX_PATH-1);
 
     OPENFILENAME filename;
     ZeroMemory(&filename, sizeof(filename));
@@ -317,21 +330,26 @@ void select_file(char *file_buffer, size_t file_buffer_size) {
     filename.Flags = OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST | OFN_NONETWORKBUTTON;
 
     if (GetOpenFileNameA(&filename)) {
-        if (strlen(buffer) < file_buffer_size) {
-            memset(file_buffer, 0,file_buffer_size);
-            strncpy(file_buffer, buffer, strlen(buffer));
+        size_t buffer_string_length = strlen(buffer);
+        if (buffer_string_length < file_buffer_size) {
+            memset(file_buffer, 0, file_buffer_size);
+            strncpy(file_buffer, buffer, buffer_string_length);
+            return 1;
         }
+
+        return 0;
     }
+    return 0;
 }
 
-void to_full_paths(char *path_buffer, size_t path_buffer_size) {
-    char *buffer = (char *)VirtualAlloc(0, path_buffer_size+1, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
+int32_t to_full_paths(char *path_buffer, size_t path_buffer_size) {
+    char *buffer = (char *)VirtualAlloc(0, path_buffer_size + 1, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
     strncpy(buffer, path_buffer, path_buffer_size);
 
-    GetFullPathName(buffer, path_buffer_size, path_buffer, 0);
-    path_buffer[path_buffer_size-1] = 0;
-
+    size_r return_size = GetFullPathName(buffer, path_buffer_size, path_buffer, 0);
     VirtualFree(buffer, 0, MEM_RELEASE);
+
+    return !!(return_size == path_buffer_size - 1);
 }
 
 
@@ -348,7 +366,7 @@ uint64_t find_latest_modified_time(Logger *logger, char *filepath) {
     uint64_t result = 0;
     if (data.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) {
         char dir_search_term[1024] = {0};
-        snprintf(dir_search_term, 1024, "%s\\*", filepath);
+        snprintf(dir_search_term, sizeof(dir_search_term)-1, "%s\\*", filepath);
 
         WIN32_FIND_DATA dir_data = {0};
         HANDLE directory_handle = FindFirstFile(dir_search_term, &dir_data);
@@ -356,7 +374,8 @@ uint64_t find_latest_modified_time(Logger *logger, char *filepath) {
         do {
             if (!is_forbidden_path(dir_data.cFileName)) {
                 memset(dir_search_term, 0, sizeof(dir_search_term));
-                snprintf(dir_search_term, sizeof(dir_search_term), "%s\\%s", filepath, dir_data.cFileName);
+                snprintf(dir_search_term, sizeof(dir_search_term)-1, "%s\\%s", filepath, dir_data.cFileName);
+
                 uint64_t write_time_for_given_file = find_latest_modified_time(logger, dir_search_term);
 
                 if (write_time_for_given_file > result) {

@@ -59,7 +59,8 @@ void watcher_log(Logger *logger, const char *message, ...) {
 
     va_list list;
     va_start(list, message);
-    vsnprintf(buf, LOG_BUFFER_LINE_SIZE, message, list);
+    vsnprintf(buf, LOG_BUFFER_LINE_SIZE-1, message, list);
+    buf[LOG_BUFFER_LINE_SIZE-1] = 0;
     va_end(list);
 
     logger->logs_end = (logger->logs_end + 1) % LOG_BUFFER_BUCKET_SIZE;
