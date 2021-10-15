@@ -42,15 +42,15 @@ extern "C" {
 struct Succotash {
     int32_t running;
     uint64_t last_modified_time;
+    int32_t  should_process_running;
 
     int32_t folder_is_invalid;
     char directory[512];
     char command[512];
 
-    Logger     logger;
+    Logger         logger;
     Process_Handle handle;
 };
-
 
 void watcher_log(Logger *logger, const char *message, ...) {
     size_t new_buffer_index = logger->logs_end;
@@ -153,19 +153,10 @@ void process_gui(Succotash *succotash, mu_Context *ctx) {
         mu_layout_row(ctx, 3, row, 0);
         int32_t should_button_be_active = (succotash->folder_is_invalid) ? MU_OPT_NOINTERACT : 0;
         if(mu_button_ex(ctx, "Start/Stop", 0, should_button_be_active)) {
-            if (!process_is_running) {
-                close_pipe(&succotash->handle);
-                if (start_process(succotash->command, &succotash->handle, &succotash->logger)) {
-                    watcher_log(&succotash->logger, "Running a process...");
-                }
-            } else {
-                watcher_log(&succotash->logger, "Stopping a process...");
-                close_pipe(&succotash->handle);
-                terminate_process(&succotash->handle);
-            }
+            succotash->should_process_running = !succotash->should_process_running;
         }
-        int32_t folder_is_not_invalid = !succotash->folder_is_invalid;
 
+        int32_t folder_is_not_invalid = !succotash->folder_is_invalid;
         mu_checkbox_ex(ctx, "Running",  &process_is_running,    MU_OPT_NOINTERACT);
         mu_checkbox_ex(ctx, "Watching", &folder_is_not_invalid, MU_OPT_NOINTERACT);
 
@@ -266,44 +257,63 @@ int main(int argc, char **argv) {
     }
 
     int32_t process_was_alive_previous_frame = 0;
-
     succotash->running = 1;
-    while (succotash->running) {
+    while (!platform_app_should_close() && succotash->running) {
+        process_event(succotash, ctx);
+        process_gui(succotash, ctx);
+
         int32_t process_is_alive = is_process_running(&succotash->handle);
         if (!process_is_alive) { 
             if (process_was_alive_previous_frame) {
                 watcher_log(&succotash->logger, "process exited. waiting for restart(press start stop or modify content in watch folder.)");
             }
         }
-
+        //
         // handle_stdout_for_process(&succotash->handle, NULL);
-        if (!succotash->folder_is_invalid && process_is_alive) {
-            uint64_t current_latest_modified_time = find_latest_modified_time(&succotash->logger, (char *)succotash->directory);
+        if (succotash->should_process_running) {
+            int32_t modification_detected = 0;
 
-            if (current_latest_modified_time > succotash->last_modified_time) {
-                watcher_log(&succotash->logger, "File change detected (timestamp %" PRIu64 "). restarting a process", current_latest_modified_time);
-                succotash->last_modified_time = current_latest_modified_time;
-                
-                if (!process_is_alive) {
-                    terminate_process(&succotash->handle); // just in case;
-                    close_pipe(&succotash->handle); // just in case;
-                    start_process(succotash->command, &succotash->handle, &succotash->logger);
-                } else {
+            if (process_is_alive) {
+                uint64_t current_latest_modified_time = find_latest_modified_time(&succotash->logger,
+                                                                                  (char *)succotash->directory);
+
+                if (current_latest_modified_time > succotash->last_modified_time) {
+                    watcher_log(&succotash->logger, "File change detected (timestamp %" PRIu64 "). restarting a process", current_latest_modified_time);
+                    succotash->last_modified_time = current_latest_modified_time;
+                    modification_detected = 1;
+                } else if (current_latest_modified_time == 0) {
+                    succotash->folder_is_invalid = 1;
+                }
+            }
+
+            if (succotash->folder_is_invalid) {
+                watcher_log(&succotash->logger, "Folder %s became invalid. cannot start/restart the process", succotash->directory);
+                succotash->should_process_running = 0;
+                continue;
+            }
+
+            if (process_is_alive) {
+                if (modification_detected) {
                     restart_process(succotash->command, &succotash->handle, &succotash->logger);
                 }
-            } else if (current_latest_modified_time == 0) {
-                watcher_log(&succotash->logger, "Folder %s became invalid. disabling restart.", succotash->directory);
-                succotash->folder_is_invalid = 1;
+            } else {
+                start_process(succotash->command, &succotash->handle, &succotash->logger);
+            }
+        } else {
+            if (process_is_alive) {
+                terminate_process(&succotash->handle);
             }
         }
 
-        process_event(succotash, ctx);
-        process_gui(succotash, ctx);
+        // NOTE(fuzzy):
+        // Placing render_gui forces renderer to sync to 60hz -- I'm using this 16ms lag to ensure that
+        // handle->pid will be a valid ID once we start the process at the same frame.
+        // otherwise the is_process_running at the top will return false because of ECHILD error, despite the process itself still running.
         render_gui(succotash, ctx);
-
         process_was_alive_previous_frame = process_is_alive;
     }  
     
+    watcher_log(&succotash->logger, "Ending the application.");
     destroy_handle(&succotash->handle);
     free(ctx);
     free(succotash);

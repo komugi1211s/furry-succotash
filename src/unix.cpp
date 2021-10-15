@@ -106,35 +106,38 @@ int32_t start_process(const char *command, Process_Handle *handle, Logger *logge
             // handle->reading_pipe[0] = 0;
 
             // dup2(handle->reading_pipe[1], STDOUT_FILENO);
+            int process_group_set_result = setpgid(0, 0);
+            int pgerr = errno;
+            if (process_group_set_result == -1) {
+                fprintf(stderr, "Failed to set setpgid: %s\n", strerror(pgerr));
+                exit(EXIT_FAILURE);
+            }
             execvp(exec_command, (char *const *)arg_list); // arg_list);
 
             int err = errno;
             printf("Failed to start a process. errno = %d\n", err);
             fflush(stdout);
-            assert(false && "Unreachable:: Process running failed.");
-            exit(127);
+            exit(EXIT_FAILURE);
         } break;
 
         default:
         {
             handle->child_pid = pid;
             free(exec_command);
+            printf("running a process: pid = %d\n", pid);
+            watcher_log(logger, "started a new process: pid = %d", handle->child_pid);
             // close(handle->reading_pipe[1]);
             // handle->reading_pipe[1] = 0;
             return 1;
         } break;
     }
-
-
-    // handle->stdout_thread = start_stdout_thread(handle, buffer);
-    free(exec_command);
-    return 1;
+    assert(false && " shouldn't be here.");
 }
 
 
 void terminate_process(Process_Handle *handle) {
     if (handle->child_pid == 0 || handle->child_pid == -1) return;
-    int kill_result = kill(handle->child_pid, SIGTERM);
+    int kill_result = kill(-handle->child_pid, SIGTERM);
     int err = errno;
     if (kill_result == -1) {
         fprintf(stderr, "Failed to kill a process. error: %d\n", err);
@@ -142,7 +145,7 @@ void terminate_process(Process_Handle *handle) {
     }
 
     int status;
-    int wait_result = waitpid(handle->child_pid, &status, 0);
+    int wait_result = waitpid(-handle->child_pid, &status, 0);
     int werr = errno;
 
     if (wait_result == -1) {
@@ -162,20 +165,32 @@ int is_process_running(Process_Handle *handle) {
     if (handle->child_pid == -1) return 0;
 
     int status = 0;
-    int result = waitpid(handle->child_pid, &status, WNOHANG);
+    int result = waitpid(-handle->child_pid, &status, WNOHANG);
     int err = errno;
 
-    if (result == -1) {
+    int32_t retry_count = 0;
+    int32_t retry_cap = 3;
+    while (result == -1) {
         if (err == ECHILD) {
-            // meaning the child is already dead.
-            handle->child_pid = -1;
-            return 0;
+            // This can happen if the parent process checks the status of child process
+            // immediately after the process has been created.
+            // wait a little bit and check again, re-try it for few more times,
+            // then bail out.
+            retry_count++;
+            if (retry_count > retry_cap) {
+                fprintf(stderr, "error occurred while checking the status of child process: %s\n, pid = %d\n", strerror(err), handle->child_pid);
+                exit(EXIT_FAILURE);
+            }
+
+            sleep_ms(50);
+            result = waitpid(-handle->child_pid, &status, WNOHANG);
+        } else {
+            fprintf(stderr, "error occurred while checking if the process is running: %s\n", strerror(err));
+            exit(EXIT_FAILURE);
         }
-        return 1; // Just assume that process is still running if it returns an error
     }
 
     if (result == 0) {
-        // Child process exists, but has no status change; assume it's working.
         return 1;
     }
 
@@ -183,6 +198,7 @@ int is_process_running(Process_Handle *handle) {
         handle->child_pid = -1;
         return 0;
     }
+    fprintf(stderr, "still alive for some reason.\n");
     return 1;
 }
 
