@@ -19,6 +19,33 @@ struct Process_Handle {
     int reading_pipe[2];
 };
 
+volatile sig_atomic_t force_stop = 0;
+
+void handle_signal(int signal) {
+    force_stop = 1;
+}
+
+int32_t platform_app_should_close() {
+    return force_stop == 1;
+}
+
+void platform_init() {
+    struct sigaction action = {0};
+    action.sa_handler = handle_signal;
+    
+    if (sigaction(SIGINT, &action, NULL) == -1) {
+        int err = errno;
+        perror("failed on platform_init() -> sigaction(SIGINT...))");
+        fprintf(stderr, "failed on platform_init() -> sigaction(SIGINT...)): %s\n", strerror(err));
+        exit(EXIT_FAILURE);
+    }
+    if (sigaction(SIGTERM, &action, NULL) == -1) {
+        int err = errno;
+        perror("failed on platform_init() -> sigaction(SIGTERM...))");
+        fprintf(stderr, "failed on platform_init() -> sigaction(SIGTERM...)): %s\n", strerror(err));
+        exit(EXIT_FAILURE);
+    }
+}
 
 // ====================================
 // Process handling.
@@ -41,6 +68,7 @@ char *separate_command_to_executable_and_args(const char *in, char **out_arg_lis
     size_t arg_count    = 0;
 
     char *executable_command = strsep(&current_ptr, " ");
+    out_arg_list[arg_count++] = executable_command;
     while(current_ptr && *current_ptr) {
         char *argument = strsep(&current_ptr, " ");
         if (!argument || arg_count >= arg_capacity)  {
@@ -60,8 +88,6 @@ int32_t start_process(const char *command, Process_Handle *handle, Logger *logge
 
     char *arg_list[32] = {0};
     char *exec_command = separate_command_to_executable_and_args(command, arg_list, 32);
-    printf("exec_command: %s\n", exec_command);
-    printf("arg-list: %s\n", arg_list[0]);
     pid_t pid = fork();
     int err = errno;
 
@@ -80,35 +106,38 @@ int32_t start_process(const char *command, Process_Handle *handle, Logger *logge
             // handle->reading_pipe[0] = 0;
 
             // dup2(handle->reading_pipe[1], STDOUT_FILENO);
+            int process_group_set_result = setpgid(0, 0);
+            int pgerr = errno;
+            if (process_group_set_result == -1) {
+                fprintf(stderr, "Failed to set setpgid: %s\n", strerror(pgerr));
+                exit(EXIT_FAILURE);
+            }
             execvp(exec_command, (char *const *)arg_list); // arg_list);
 
             int err = errno;
             printf("Failed to start a process. errno = %d\n", err);
             fflush(stdout);
-            assert(false && "Unreachable:: Process running failed.");
-            exit(127);
+            exit(EXIT_FAILURE);
         } break;
 
         default:
         {
             handle->child_pid = pid;
             free(exec_command);
+            printf("running a process: pid = %d\n", pid);
+            watcher_log(logger, "started a new process: pid = %d", handle->child_pid);
             // close(handle->reading_pipe[1]);
             // handle->reading_pipe[1] = 0;
             return 1;
         } break;
     }
-
-
-    // handle->stdout_thread = start_stdout_thread(handle, buffer);
-    free(exec_command);
-    return 1;
+    assert(false && " shouldn't be here.");
 }
 
 
 void terminate_process(Process_Handle *handle) {
     if (handle->child_pid == 0 || handle->child_pid == -1) return;
-    int kill_result = kill(handle->child_pid, SIGTERM);
+    int kill_result = kill(-handle->child_pid, SIGTERM);
     int err = errno;
     if (kill_result == -1) {
         fprintf(stderr, "Failed to kill a process. error: %d\n", err);
@@ -116,7 +145,7 @@ void terminate_process(Process_Handle *handle) {
     }
 
     int status;
-    int wait_result = waitpid(handle->child_pid, &status, 0);
+    int wait_result = waitpid(-handle->child_pid, &status, 0);
     int werr = errno;
 
     if (wait_result == -1) {
@@ -136,20 +165,32 @@ int is_process_running(Process_Handle *handle) {
     if (handle->child_pid == -1) return 0;
 
     int status = 0;
-    int result = waitpid(handle->child_pid, &status, WNOHANG);
+    int result = waitpid(-handle->child_pid, &status, WNOHANG);
     int err = errno;
 
-    if (result == -1) {
+    int32_t retry_count = 0;
+    int32_t retry_cap = 3;
+    while (result == -1) {
         if (err == ECHILD) {
-            // meaning the child is already dead.
-            handle->child_pid = -1;
-            return 0;
+            // This can happen if the parent process checks the status of child process
+            // immediately after the process has been created.
+            // wait a little bit and check again, re-try it for few more times,
+            // then bail out.
+            retry_count++;
+            if (retry_count > retry_cap) {
+                fprintf(stderr, "error occurred while checking the status of child process: %s\n, pid = %d\n", strerror(err), handle->child_pid);
+                exit(EXIT_FAILURE);
+            }
+
+            sleep_ms(50);
+            result = waitpid(-handle->child_pid, &status, WNOHANG);
+        } else {
+            fprintf(stderr, "error occurred while checking if the process is running: %s\n", strerror(err));
+            exit(EXIT_FAILURE);
         }
-        return 1; // Just assume that process is still running if it returns an error
     }
 
     if (result == 0) {
-        // Child process exists, but has no status change; assume it's working.
         return 1;
     }
 
@@ -157,6 +198,7 @@ int is_process_running(Process_Handle *handle) {
         handle->child_pid = -1;
         return 0;
     }
+    fprintf(stderr, "still alive for some reason.\n");
     return 1;
 }
 
@@ -382,7 +424,7 @@ uint64_t find_latest_modified_time(Logger *logger, char *filepath) {
 
                 if (total_length < 1024) {
                     char new_filepath[1024] = {0};
-                    snprintf(new_filepath, 1024, "%s/%s", filepath, file_entry->d_name);
+                    snprintf(new_filepath, 1023, "%s/%s", filepath, file_entry->d_name);
                     uint64_t file_time = find_latest_modified_time(logger, new_filepath);
 
                     current_latest = (file_time > current_latest) ? file_time : current_latest;
