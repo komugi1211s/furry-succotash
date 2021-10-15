@@ -2,6 +2,8 @@
 // Linux. 
 /* ======================= */
 #include <sys/stat.h>
+#include <sys/wait.h>
+#include <stdio.h>
 #include <errno.h>
 #include <dirent.h>
 #include <pthread.h>
@@ -11,87 +13,78 @@
 
 #include "main.h"
 
-typedef struct {
-    int state;
-    pthread_mutex_t mutex;
-} Channel;
-
-struct Thread_Handle {
-    pthread_t inner;
-};
-
 struct Process_Handle {
-    const char *command;
-
-    int child_pid;
+    int32_t valid; // todo: unused
+    pid_t child_pid;
     int reading_pipe[2];
-
-    Thread_Handle stdout_thread;
 };
 
-typedef struct {
-    int read_fd;
-    Logger *output;
-} Thread_Info;
 
 // ====================================
 // Process handling.
 
-Process_Handle create_handle_from_command(const char *command_as_chars){
+Process_Handle create_process_handle() {
     Process_Handle handle = {0};
-    if (strlen(command_as_chars) == 0) {
-        return handle;
-    }
-
-    handle.command   = command_as_chars;
     handle.child_pid = -1;
+    handle.valid     = 1;
     return handle;
 }
 
-char *separate_command_to_executable_and_args(const char *in, char *out_arg_list[], size_t arg_capacity) {
+void destroy_handle(Process_Handle *handle) {
+    terminate_process(handle);
+    close_pipe(handle);
+}
+
+char *separate_command_to_executable_and_args(const char *in, char **out_arg_list, size_t arg_capacity) {
     char *copied_string = strdup(in);
     char *current_ptr   = copied_string;
     size_t arg_count    = 0;
 
     char *executable_command = strsep(&current_ptr, " ");
-    for(;;) {
+    while(current_ptr && *current_ptr) {
         char *argument = strsep(&current_ptr, " ");
-        if (!current_ptr || !argument || arg_count >= arg_capacity) break;
+        if (!argument || arg_count >= arg_capacity)  {
+            break;
+        }
         out_arg_list[arg_count++] = argument;
     }
 
     return executable_command;
 }
 
-void start_process(Process_Handle *handle, Logger *logger) {
-    // Create Argument list.
-
-    if (!create_pipe(handle)) {
-        return;
-    }
+int32_t start_process(const char *command, Process_Handle *handle, Logger *logger) {
+    // Create Argument list.  if (!create_pipe(handle)) {
+    //     watcher_log(logger, "Failed to create a pipe.");
+    //     return 0;
+    // }
 
     char *arg_list[32] = {0};
-    char *exec_command = separate_command_to_executable_and_args(handle->command, arg_list, 32);
-
-    int pid = fork();
+    char *exec_command = separate_command_to_executable_and_args(command, arg_list, 32);
+    printf("exec_command: %s\n", exec_command);
+    printf("arg-list: %s\n", arg_list[0]);
+    pid_t pid = fork();
+    int err = errno;
 
     switch(pid) {
         case -1:
         {
             close_pipe(handle);
+            watcher_log(logger, "Failed to create a fork: %d.", err);
             free(exec_command);
-            return;
+            return 0;
         } break;
 
         case 0:
         {
-            close(handle->reading_pipe[0]);
-            handle->reading_pipe[0] = 0;
+            // close(handle->reading_pipe[0]);
+            // handle->reading_pipe[0] = 0;
 
-            dup2(handle->reading_pipe[1], STDOUT_FILENO);
-            execvp(exec_command, arg_list);
+            // dup2(handle->reading_pipe[1], STDOUT_FILENO);
+            execvp(exec_command, (char *const *)arg_list); // arg_list);
 
-            // Unreachable!
+            int err = errno;
+            printf("Failed to start a process. errno = %d\n", err);
+            fflush(stdout);
             assert(false && "Unreachable:: Process running failed.");
             exit(127);
         } break;
@@ -99,35 +92,120 @@ void start_process(Process_Handle *handle, Logger *logger) {
         default:
         {
             handle->child_pid = pid;
-            close(handle->reading_pipe[1]);
-            handle->reading_pipe[1] = 0;
+            free(exec_command);
+            // close(handle->reading_pipe[1]);
+            // handle->reading_pipe[1] = 0;
+            return 1;
         } break;
     }
 
 
-    handle->stdout_thread = start_stdout_thread(handle, buffer);
+    // handle->stdout_thread = start_stdout_thread(handle, buffer);
     free(exec_command);
-    return;
+    return 1;
 }
 
-void restart_process(Process_Handle *handle, Logger *logger) {
-    if (handle->child_pid == 0 || handle->child_pid == -1) return;
 
-    kill(handle->child_pid, SIGTERM);
-    close_pipe(handle);
+void terminate_process(Process_Handle *handle) {
+    if (handle->child_pid == 0 || handle->child_pid == -1) return;
+    int kill_result = kill(handle->child_pid, SIGTERM);
+    int err = errno;
+    if (kill_result == -1) {
+        fprintf(stderr, "Failed to kill a process. error: %d\n", err);
+        exit(EXIT_FAILURE);
+    }
+
+    int status;
+    int wait_result = waitpid(handle->child_pid, &status, 0);
+    int werr = errno;
+
+    if (wait_result == -1) {
+        fprintf(stderr, "Failed to wait a process. error: %d\n", werr);
+        exit(EXIT_FAILURE);
+    }
 
     handle->child_pid = -1;
+}
 
-    start_process(handle, buffer);
+int32_t restart_process(const char *command, Process_Handle *handle, Logger *logger) {
+    terminate_process(handle);
+    return start_process(command, handle, logger);
 }
 
 int is_process_running(Process_Handle *handle) {
-    return handle->child_pid != -1;
+    if (handle->child_pid == -1) return 0;
+
+    int status = 0;
+    int result = waitpid(handle->child_pid, &status, WNOHANG);
+    int err = errno;
+
+    if (result == -1) {
+        if (err == ECHILD) {
+            // meaning the child is already dead.
+            handle->child_pid = -1;
+            return 0;
+        }
+        return 1; // Just assume that process is still running if it returns an error
+    }
+
+    if (result == 0) {
+        // Child process exists, but has no status change; assume it's working.
+        return 1;
+    }
+
+    if (WIFEXITED(status) || WIFSIGNALED(status)) {
+        handle->child_pid = -1;
+        return 0;
+    }
+    return 1;
 }
+
+
+int32_t zenity_to_select_file_or_folder(char *outbuf, size_t outbuf_size, int32_t folder_selection) {
+    if (outbuf_size < 512) {
+        return 0;
+    }
+
+    char buffer[512] = {0};
+    FILE *zenity = 0;
+    if (folder_selection) {
+        zenity = popen("zenity --file-selection --directory --title=\"Select a Folder...\"", "r");
+    } else {
+        zenity = popen("zenity --file-selection --title=\"Select a File...\"", "r");
+    }
+
+    if (zenity) {
+        fread(buffer, 511, 1, zenity);
+        pclose(zenity);
+        memset(outbuf, 0, outbuf_size);
+        memcpy(outbuf, buffer, 512);
+
+        size_t last_char = strlen(outbuf);
+        if(outbuf[last_char - 1] == '\n') {
+            outbuf[last_char - 1] = '\0';
+        }
+        return 1;
+    }
+    return 0;
+}
+
+int32_t select_new_folder(char *folder_buffer, size_t folder_buffer_size) {
+    return zenity_to_select_file_or_folder(folder_buffer, folder_buffer_size, 1);
+}
+
+int32_t select_file(char *file_buffer, size_t file_buffer_size) {
+    return zenity_to_select_file_or_folder(file_buffer, file_buffer_size, 0);
+}
+
+int32_t to_full_paths(char *paths_buffer, size_t paths_buffer_size) {
+    return 1;
+}
+
 
 // repeatedly read stdout from process.
 // should be used within the thread.
 
+/*
 typedef struct {
     Process_Handle *handle;
     Logger *logger;
@@ -204,6 +282,7 @@ void handle_stdout_for_process(void *ptr) {
         read_amount = (size_t) read_amount_or_error;
     }
 }
+*/
 
 // Create pipe for given handle.
 // crashes on invalid handle.
@@ -244,9 +323,10 @@ void close_pipe(Process_Handle *handle) {
 // Threading.
 
 
+/*
 void *stdout_task(void *arg) {
     printf("begin\n");
-    handle_stdout_for_process(arg);
+    // handle_stdout_for_process(arg);
     printf("end\n");
 
     pthread_exit(NULL);
@@ -263,6 +343,7 @@ Thread_Handle start_stdout_thread(Process_Handle *handle, Logger *logger) {
     pthread_create(&thread.inner, NULL, stdout_task, (void *)i); // problem!
     return thread;
 }
+*/
 
 // ====================================
 // Files.
@@ -275,20 +356,20 @@ bool is_forbidden_path(char *path) {
     );
 }
 
-uint64_t find_latest_modified_time(char *path) {
-    if (is_forbidden_path(path)) return 0;
-    size_t path_length = strlen(path);
+uint64_t find_latest_modified_time(Logger *logger, char *filepath) {
+    if (is_forbidden_path(filepath)) return 0;
+    size_t path_length = strlen(filepath);
 
 
     // Get file's information, returning on failure
     struct stat status;
-    if (stat(path, &status) == -1) {
-        printf("failed to load path by stat: %s, path: %s\n", strerror(errno), path);
+    if (stat(filepath, &status) == -1) {
+        watcher_log(logger, "failed to load path by stat: %s, path: %s\n", strerror(errno), filepath);
         return 0;
     }
 
     if (S_ISDIR(status.st_mode)) {
-        DIR *dir = opendir(path);
+        DIR *dir = opendir(filepath);
 
         if (dir) {
             uint64_t current_latest = 0;
@@ -300,20 +381,17 @@ uint64_t find_latest_modified_time(char *path) {
                 size_t total_length = name_length + path_length;
 
                 if (total_length < 1024) {
-                    char filepath[1024] = {0};
-                    snprintf(filepath, 1024, "%s/%s", path, file_entry->d_name);
-                    uint64_t file_time = find_latest_modified_time(filepath); // recursive call
+                    char new_filepath[1024] = {0};
+                    snprintf(new_filepath, 1024, "%s/%s", filepath, file_entry->d_name);
+                    uint64_t file_time = find_latest_modified_time(logger, new_filepath);
 
                     current_latest = (file_time > current_latest) ? file_time : current_latest;
-                } else {
-                    printf("failed to open file: file path length too long\n");
                 }
             }
 
             closedir(dir);
             return current_latest;
         } else {
-            printf("Not a directory :( : %s\n", strerror(errno));
             return 0;
         }
     } else {

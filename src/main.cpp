@@ -44,15 +44,15 @@ struct Succotash {
     uint64_t last_modified_time;
 
     int32_t folder_is_invalid;
-    char directory[256];
-    char command[256];
+    char directory[512];
+    char command[512];
 
     Logger     logger;
     Process_Handle handle;
 };
 
 
-void watcher_log(Logger *logger, char *message, ...) {
+void watcher_log(Logger *logger, const char *message, ...) {
     size_t new_buffer_index = logger->logs_end;
     char *buf = logger->logs[new_buffer_index];
     memset(buf, 0, LOG_BUFFER_LINE_SIZE);
@@ -147,25 +147,25 @@ void process_gui(Succotash *succotash, mu_Context *ctx) {
     mu_begin(ctx);
     int32_t process_is_running = is_process_running(&succotash->handle); // just for display!
 
-
     if (mu_begin_window_ex(ctx, "Base_Window", mu_rect(0, 0, 350, 300), MU_OPT_NOTITLE | MU_OPT_NORESIZE | MU_OPT_NOCLOSE)) {
         int row[] = { 80, 80, 80 };
         mu_layout_row(ctx, 3, row, 0);
-        int32_t option_for_running_button = (succotash->folder_is_invalid) ? MU_OPT_NOINTERACT : 0;
-        if(mu_button_ex(ctx, "Start/Stop", 0, option_for_running_button)) {
+        int32_t should_button_be_active = (succotash->folder_is_invalid) ? MU_OPT_NOINTERACT : 0;
+        if(mu_button_ex(ctx, "Start/Stop", 0, should_button_be_active)) {
             if (!process_is_running) {
-                watcher_log(&succotash->logger, "Running a process...");
                 close_pipe(&succotash->handle);
-                start_process(succotash->command, &succotash->handle, &succotash->logger);
+                if (start_process(succotash->command, &succotash->handle, &succotash->logger)) {
+                    watcher_log(&succotash->logger, "Running a process...");
+                }
             } else {
-                watcher_log(&succotash->logger, "Restarting a process...");
+                watcher_log(&succotash->logger, "Stopping a process...");
                 close_pipe(&succotash->handle);
                 terminate_process(&succotash->handle);
             }
         }
-        mu_checkbox_ex(ctx, "Running",  &process_is_running,           MU_OPT_NOINTERACT);
-
         int32_t folder_is_not_invalid = !succotash->folder_is_invalid;
+
+        mu_checkbox_ex(ctx, "Running",  &process_is_running,    MU_OPT_NOINTERACT);
         mu_checkbox_ex(ctx, "Watching", &folder_is_not_invalid, MU_OPT_NOINTERACT);
 
         // ============ Command Window ============ 
@@ -175,8 +175,11 @@ void process_gui(Succotash *succotash, mu_Context *ctx) {
         option |= (process_is_running) ? MU_OPT_NOINTERACT : 0;
 
         if(mu_button_ex(ctx, "Directory", 0, option)) {
-            select_new_folder(succotash->directory, sizeof(succotash->directory));
-            succotash->folder_is_invalid = 0;
+            if(select_new_folder(succotash->directory, sizeof(succotash->directory))) {
+                succotash->folder_is_invalid = 0;
+            } else {
+                watcher_log(&succotash->logger, "Failed to choose a file.");
+            }
         }
 
         if(mu_textbox_ex(ctx, succotash->directory, sizeof(succotash->directory), option) & MU_RES_SUBMIT) {
@@ -271,8 +274,8 @@ int main(int argc, char **argv) {
             }
         }
 
-        handle_stdout_for_process(&succotash->handle, NULL);
-        if (!succotash->folder_is_invalid) {
+        // handle_stdout_for_process(&succotash->handle, NULL);
+        if (!succotash->folder_is_invalid && process_is_alive) {
             uint64_t current_latest_modified_time = find_latest_modified_time(&succotash->logger, (char *)succotash->directory);
 
             if (current_latest_modified_time > succotash->last_modified_time) {
