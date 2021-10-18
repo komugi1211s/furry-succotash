@@ -150,7 +150,8 @@ void process_event(Succotash *succotash, mu_Context *ctx) {
 void process_gui(Succotash *succotash, mu_Context *ctx) {
     /* process frame */
     mu_begin(ctx);
-    int32_t process_is_running = is_process_running(&succotash->handle); // just for display!
+    int32_t process_status;
+    int32_t process_is_running = get_process_status(&succotash->handle, &process_status); // just for display!
     int width, height;
     r_get_window_size(&width, &height);
 
@@ -257,23 +258,44 @@ int main(int argc, char **argv) {
     succotash->folder_is_invalid  = succotash->last_modified_time == 0;
     watcher_log(&succotash->logger, "Waiting.");
 
-    if (!succotash->handle.valid) {
-        printf("Failed to start a program.\n");
-        return 0;
-    }
-
     int32_t process_was_alive_previous_frame = 0;
     succotash->running = 1;
     while (!platform_app_should_close() && succotash->running) {
-        process_event(succotash, ctx);
-        process_gui(succotash, ctx);
-
-        int32_t process_is_alive = is_process_running(&succotash->handle);
+        int32_t process_status;
+        int32_t process_is_alive = get_process_status(&succotash->handle, &process_status);
         if (!process_is_alive) { 
+            // Process is already dead, but have to reset the handle.
+            terminate_process(&succotash->handle);
+
+            switch(process_status) {
+                case PROCESS_NOT_RUNNING:
+                    if (process_was_alive_previous_frame) {
+                        watcher_log(&succotash->logger, "Process not running at all.");
+                    }
+                    break;
+
+                case PROCESS_DIED_ERROR:
+                    watcher_log(&succotash->logger, "Process died due to an error. check your process/command, and try again.");
+                    succotash->should_process_running = 0;
+                    break;
+
+                case PROCESS_DIED_CORRECLTLY:
+                    watcher_log(&succotash->logger, "Process exited successfully.");
+                    break;
+
+                case PROCESS_DIED_KILLED:
+                    watcher_log(&succotash->logger, "Process got killed by a signal, etc.");
+                    break;
+            }
+
             if (process_was_alive_previous_frame) {
                 watcher_log(&succotash->logger, "process exited. waiting for restart(press start stop or modify content in watch folder.)");
             }
         }
+
+        process_event(succotash, ctx);
+        process_gui(succotash, ctx);
+
         //
         // handle_stdout_for_process(&succotash->handle, NULL);
         if (succotash->should_process_running) {
@@ -303,7 +325,10 @@ int main(int argc, char **argv) {
                     restart_process(succotash->command, &succotash->handle, &succotash->logger);
                 }
             } else {
-                start_process(succotash->command, &succotash->handle, &succotash->logger);
+                if(!start_process(succotash->command, &succotash->handle, &succotash->logger)) {
+                    watcher_log(&succotash->logger, "Failed to run a process. specify the correct executables and try again.");
+                    succotash->should_process_running = 0;
+                }
             }
         } else {
             if (process_is_alive) {
@@ -316,11 +341,12 @@ int main(int argc, char **argv) {
         // handle->pid will be a valid ID once we start the process at the same frame.
         // otherwise the is_process_running at the top will return false because of ECHILD error, despite the process itself still running.
         render_gui(succotash, ctx);
+
         process_was_alive_previous_frame = process_is_alive;
     }  
     
     watcher_log(&succotash->logger, "Ending the application.");
-    destroy_handle(&succotash->handle);
+    destroy_process_handle(&succotash->handle);
     free(ctx);
     free(succotash);
     return 0;

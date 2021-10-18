@@ -3,12 +3,7 @@
 #include <Windows.h>
 #include "main.h"
 
-struct Thread_Handle { // TODO: unused
-    HANDLE inner;
-};
-
 struct Process_Handle {
-    int32_t valid; // TODO: unused
     PROCESS_INFORMATION procinfo;
 
     HANDLE read_pipe;
@@ -93,7 +88,6 @@ Process_Handle create_process_handle() {
     Process_Handle handle = {0};
     ZeroMemory(&handle.procinfo, sizeof(PROCESS_INFORMATION));
 
-    handle.valid = 1;
     return handle;
 }
 
@@ -118,9 +112,12 @@ char *strsep(char **stringp, const char *delim) {
     return not_found;
 }
 
-int is_process_running(Process_Handle *handle) {
+int get_process_status(Process_Handle *handle, int *process_status) {
     HANDLE empty = {0};
+    int status_empty = 0;
+
     if(handle->procinfo.hProcess == empty) return 0;
+    if (!process_status) process_status = &status_empty;
 
     DWORD exit_code;
     GetExitCodeProcess(handle->procinfo.hProcess, &exit_code);
@@ -128,12 +125,21 @@ int is_process_running(Process_Handle *handle) {
     if (exit_code == STILL_ACTIVE) {
         switch(WaitForSingleObject(handle->procinfo.hProcess, 0)) {
             case WAIT_TIMEOUT:
+            {
+                *process_status = PROCESS_STILL_ALIVE;
                 return 1;
+            } break;
 
             default:
+                *process_status = PROCESS_DIED_ERROR;
                 return 0;
         }
     } else {
+        if (exit_code == 0) {
+            *process_status = PROCESS_DIED_CORRECLTLY;
+        } else {
+            *process_status = PROCESS_DIED_ERROR;
+        }
         return 0;
     }
 }
@@ -157,22 +163,23 @@ char *separate_command_to_executable_and_args(const char *in, char *out_arg_list
 }
 
 void terminate_process(Process_Handle *process) { // try to terminate the process whether it's alive or not.
-    TerminateProcess(process->procinfo.hProcess, 0);
+    if (process->procinfo.hProcess != 0) {
+        TerminateProcess(process->procinfo.hProcess, 0);
 
-    WaitForSingleObject(process->procinfo.hProcess, INFINITE);
-    WaitForSingleObject(process->procinfo.hThread,  INFINITE);
+        WaitForSingleObject(process->procinfo.hProcess, INFINITE);
+        WaitForSingleObject(process->procinfo.hThread,  INFINITE);
 
-    CloseHandle(process->procinfo.hProcess);
-    CloseHandle(process->procinfo.hThread);
+        CloseHandle(process->procinfo.hProcess);
+        CloseHandle(process->procinfo.hThread);
+    }
+
+    ZeroMemory(&handle->procinfo, sizeof(handle->procinfo));
 }
 
 void restart_process(const char *command, Process_Handle *handle, Logger *logger) {
-    assert(is_process_running(handle) && "Process is not running");
     terminate_process(handle);
 
-    assert(!is_process_running(handle) && "Process is still runnning despite of terminate process");
-    ZeroMemory(&handle->procinfo, sizeof(handle->procinfo));
-
+    assert(!get_process_status(handle, NULL) && "Process is still runnning despite of terminate process");
     start_process(command, handle, logger);
 }
 
@@ -214,7 +221,7 @@ int32_t start_process(const char *command, Process_Handle *handle, Logger *logge
 void handle_stdout_for_process(Process_Handle *process, Logger *Logger) {
     return; // giving up actually handling stdout for now. I have to think how to do it
 
-    if (!is_process_running(process)) return;
+    if (!get_process_status(process, NULL)) return;
 
     // DWORD current_pipe_occupied_amount = 0;
     char buffer[1024] = {0};

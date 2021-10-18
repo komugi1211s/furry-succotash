@@ -28,15 +28,27 @@ void platform_init();
 
 struct Process_Handle;
 struct Logger;
+
 Process_Handle create_process_handle();
+void destroy_process_handle(Process_Handle *handle);
 char *separate_command_to_executable_and_args(const char *in, char *out_arg_list[], size_t arg_capacity);
+
 
 int32_t start_process(const char *command, Process_Handle *handle, Logger *logger);
 int32_t restart_process(const char *command, Process_Handle *handle, Logger *logger);
 void terminate_process(Process_Handle *handle); // try to terminate the process whether it's alive or not.
 
-int  is_process_running(Process_Handle *handle);
+int  get_process_status(Process_Handle *handle, int *process_status);
 void sleep_ms(int ms);
+
+enum {
+    PROCESS_NOT_RUNNING,
+    PROCESS_STILL_ALIVE,
+    PROCESS_DIED_ERROR,
+    PROCESS_DIED_KILLED,
+    PROCESS_DIED_CORRECLTLY,
+    PROCESS_MAX,
+};
 
 
 /* Code below are functions that are currently confirmed to be required in Unix. */

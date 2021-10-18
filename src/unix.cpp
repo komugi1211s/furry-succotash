@@ -14,7 +14,6 @@
 #include "main.h"
 
 struct Process_Handle {
-    int32_t valid; // todo: unused
     pid_t child_pid;
     int reading_pipe[2];
 };
@@ -53,11 +52,10 @@ void platform_init() {
 Process_Handle create_process_handle() {
     Process_Handle handle = {0};
     handle.child_pid = -1;
-    handle.valid     = 1;
     return handle;
 }
 
-void destroy_handle(Process_Handle *handle) {
+void destroy_process_handle(Process_Handle *handle) {
     terminate_process(handle);
     close_pipe(handle);
 }
@@ -91,55 +89,63 @@ int32_t start_process(const char *command, Process_Handle *handle, Logger *logge
     pid_t pid = fork();
     int err = errno;
 
-    switch(pid) {
-        case -1:
-        {
-            close_pipe(handle);
-            watcher_log(logger, "Failed to create a fork: %d.", err);
-            free(exec_command);
-            return 0;
-        } break;
-
-        case 0:
-        {
-            // close(handle->reading_pipe[0]);
-            // handle->reading_pipe[0] = 0;
-
-            // dup2(handle->reading_pipe[1], STDOUT_FILENO);
-            int process_group_set_result = setpgid(0, 0);
-            int pgerr = errno;
-            if (process_group_set_result == -1) {
-                fprintf(stderr, "Failed to set setpgid: %s\n", strerror(pgerr));
-                exit(EXIT_FAILURE);
-            }
-            execvp(exec_command, (char *const *)arg_list); // arg_list);
-
-            int err = errno;
-            printf("Failed to start a process. errno = %d\n", err);
-            fflush(stdout);
-            exit(EXIT_FAILURE);
-        } break;
-
-        default:
-        {
-            handle->child_pid = pid;
-            free(exec_command);
-            printf("running a process: pid = %d\n", pid);
-            watcher_log(logger, "started a new process: pid = %d", handle->child_pid);
-            // close(handle->reading_pipe[1]);
-            // handle->reading_pipe[1] = 0;
-            return 1;
-        } break;
+    if (pid == -1) {
+        watcher_log(logger, "Failed to create a process via fork: errno %s", strerror(err));
+        free(exec_command);
+        return 0;
     }
-    assert(false && " shouldn't be here.");
+
+    // Child Process.
+    if (pid == 0) {
+        // Set the process group to new distinct one so that
+        // I can specify the entire group to kill the grandchildren process altogether.
+        int process_group_set_result = setpgid(0, 0);
+        int pgerr = errno;
+
+        if (process_group_set_result == -1) {
+            fprintf(stderr, "Failed to set setpgid. errno = %s\n", strerror(pgerr));
+            // Wait for a little bit so that I can prevent the process creation spam.
+            sleep_ms(500);
+            exit(EXIT_FAILURE);
+        }
+
+        execvp(exec_command, (char *const *)arg_list); // arg_list);
+
+        // Failed to run a process. I shouldn't be here!
+        int err = errno;
+        fprintf(stderr, "Failed to start a process. errno = %s\n", strerror(err));
+
+        // Wait for a little bit so that I can prevent the process creation spam.
+        sleep_ms(500);
+        exit(EXIT_FAILURE);
+    }
+
+    // Parent process!
+
+    handle->child_pid = pid;
+    free(exec_command);
+    watcher_log(logger, "started a new process: pid = %d", handle->child_pid);
+
+    return 1;
 }
 
 
+/*
+ * Kills the child process if alive and releases the process handle.
+ * */
 void terminate_process(Process_Handle *handle) {
     if (handle->child_pid == 0 || handle->child_pid == -1) return;
     int kill_result = kill(-handle->child_pid, SIGTERM);
     int err = errno;
+
     if (kill_result == -1) {
+ 
+        // sanitize handle if the process is already dead and does not exist.
+        if (err == ESRCH) {
+            handle->child_pid = -1;
+            return;
+        }
+
         fprintf(stderr, "Failed to kill a process. error: %d\n", err);
         exit(EXIT_FAILURE);
     }
@@ -161,8 +167,11 @@ int32_t restart_process(const char *command, Process_Handle *handle, Logger *log
     return start_process(command, handle, logger);
 }
 
-int is_process_running(Process_Handle *handle) {
-    if (handle->child_pid == -1) return 0;
+int get_process_status(Process_Handle *handle, int *process_status) {
+    if (handle->child_pid == -1) {
+        *process_status = PROCESS_NOT_RUNNING;
+        return 0;
+    }
 
     int status = 0;
     int result = waitpid(-handle->child_pid, &status, WNOHANG);
@@ -191,11 +200,19 @@ int is_process_running(Process_Handle *handle) {
     }
 
     if (result == 0) {
+        *process_status = PROCESS_STILL_ALIVE;
         return 1;
     }
 
-    if (WIFEXITED(status) || WIFSIGNALED(status)) {
-        handle->child_pid = -1;
+    if (WIFEXITED(status)) {
+        if (WEXITSTATUS(status) == EXIT_SUCCESS) {
+            *process_status = PROCESS_DIED_CORRECLTLY;
+        } else {
+            *process_status = PROCESS_DIED_ERROR;
+        }
+        return 0;
+    } else if (WIFSIGNALED(status)) {
+        *process_status = PROCESS_DIED_KILLED;
         return 0;
     }
     fprintf(stderr, "still alive for some reason.\n");
