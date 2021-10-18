@@ -21,7 +21,7 @@ enum { ATLAS_WIDTH = 128, ATLAS_HEIGHT = 128 };
 extern unsigned char atlas_texture[ATLAS_WIDTH * ATLAS_HEIGHT];
 extern mu_Rect atlas[256];
 
-void r_init(void);
+void r_init(int width, int height);
 void r_draw_rect(mu_Rect rect, mu_Color color);
 void r_draw_text(const char *text, mu_Vec2 pos, mu_Color color);
 void r_draw_icon(int id, mu_Rect rect, mu_Color color);
@@ -30,6 +30,11 @@ int r_get_text_height(void);
 void r_set_clip_rect(mu_Rect rect);
 void r_clear(mu_Color color);
 void r_present(void);
+void r_get_window_size(int *width, int *height);
+
+static int captured_window_size_this_frame = 0;
+static int window_width;
+static int window_height;
 
 ////////////////////////////////
 //~ Main UI Code
@@ -263,18 +268,16 @@ static GLfloat  vert_buf[BUFFER_SIZE *  8];
 static GLubyte color_buf[BUFFER_SIZE * 16];
 static GLuint  index_buf[BUFFER_SIZE *  6];
 
-static int width  = 350;
-static int height = 300;
 static int buf_idx;
 
 static SDL_Window *window;
 
-
-void r_init(void) {
+void r_init(int width, int height) {
     /* init SDL window */
-    window = SDL_CreateWindow(
-                              NULL, SDL_WINDOWPOS_UNDEFINED, SDL_WINDOWPOS_UNDEFINED,
-                              width, height, SDL_WINDOW_OPENGL);
+    window = SDL_CreateWindow(NULL, SDL_WINDOWPOS_UNDEFINED, SDL_WINDOWPOS_UNDEFINED,
+                              width, height, SDL_WINDOW_OPENGL | SDL_WINDOW_ALLOW_HIGHDPI | SDL_WINDOW_RESIZABLE);
+    window_width = width;
+    window_height = height;
     SDL_GL_CreateContext(window);
     
     /* init gl */
@@ -303,6 +306,8 @@ void r_init(void) {
 static void flush(void) {
     if (buf_idx == 0) { return; }
     
+    int width, height;
+    r_get_window_size(&width, &height);
     glViewport(0, 0, width, height);
     glMatrixMode(GL_PROJECTION);
     glPushMatrix();
@@ -419,6 +424,8 @@ int r_get_text_height(void) {
 
 
 void r_set_clip_rect(mu_Rect rect) {
+    int width, height;
+    r_get_window_size(&width, &height);
     flush();
     glScissor(rect.x, height - (rect.y + rect.h), rect.w, rect.h);
 }
@@ -426,14 +433,28 @@ void r_set_clip_rect(mu_Rect rect) {
 
 void r_clear(mu_Color clr) {
     flush();
+    int w, h;
+    r_get_window_size(&w, &h);
     glClearColor(clr.r / 255., clr.g / 255., clr.b / 255., clr.a / 255.);
     glClear(GL_COLOR_BUFFER_BIT);
+    glScissor(0, 0, w, h);
+}
+
+void r_get_window_size(int *width, int *height) {
+    if (!captured_window_size_this_frame) {
+        SDL_GL_GetDrawableSize(window, &window_width, &window_height);
+        captured_window_size_this_frame = 1;
+    }
+
+    *width  = window_width;
+    *height = window_height;
 }
 
 
 void r_present(void) {
     flush();
     SDL_GL_SwapWindow(window);
+    captured_window_size_this_frame = 0;
 }
 
 ////////////////////////////////

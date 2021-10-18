@@ -1098,6 +1098,11 @@ int mu_begin_window_ex(mu_Context *ctx, const char *title, mu_Rect rect, int opt
   push(ctx->id_stack, id);
 
   if (cnt->rect.w == 0) { cnt->rect = rect; }
+  // NOTE: Added
+  if (cnt->rect.w != rect.w || cnt->rect.h != rect.h) {
+    cnt->rect = rect;
+  }
+
   begin_root_container(ctx, cnt);
   rect = body = cnt->rect;
 

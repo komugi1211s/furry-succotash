@@ -14,10 +14,13 @@
 #include <SDL2/SDL_opengl.h>
 #endif
 
+static int WINDOW_WIDTH  = 350;
+static int WINDOW_HEIGHT = 300;
+
 extern "C" {
     #include "vendor/microui.h"
 
-    void r_init(void);
+    void r_init(int width, int height);
     void r_draw_rect(mu_Rect rect, mu_Color color);
     void r_draw_text(const char *text, mu_Vec2 pos, mu_Color color);
     void r_draw_icon(int id, mu_Rect rect, mu_Color color);
@@ -28,6 +31,7 @@ extern "C" {
     void r_set_clip_rect(mu_Rect rect);
     void r_clear(mu_Color color);
     void r_present(void);
+    void r_get_window_size(int *width, int *height);
 }
 
 #if _WIN32
@@ -147,8 +151,10 @@ void process_gui(Succotash *succotash, mu_Context *ctx) {
     /* process frame */
     mu_begin(ctx);
     int32_t process_is_running = is_process_running(&succotash->handle); // just for display!
+    int width, height;
+    r_get_window_size(&width, &height);
 
-    if (mu_begin_window_ex(ctx, "Base_Window", mu_rect(0, 0, 350, 300), MU_OPT_NOTITLE | MU_OPT_NORESIZE | MU_OPT_NOCLOSE)) {
+    if (mu_begin_window_ex(ctx, "Base_Window", mu_rect(0, 0, width, height), MU_OPT_NOTITLE | MU_OPT_NORESIZE | MU_OPT_NOCLOSE)) {
         int row[] = { 80, 80, 80 };
         mu_layout_row(ctx, 3, row, 0);
         int32_t should_button_be_active = (succotash->folder_is_invalid) ? MU_OPT_NOINTERACT : 0;
@@ -227,7 +233,7 @@ void render_gui(Succotash *succotash, mu_Context *ctx) {
 
 int main(int argc, char **argv) {
     SDL_Init(SDL_INIT_EVERYTHING);
-    r_init();
+    r_init(WINDOW_WIDTH, WINDOW_HEIGHT);
     platform_init();
 
     /* init microui */
