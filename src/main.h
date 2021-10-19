@@ -18,7 +18,7 @@ typedef struct Logger {
     size_t logs_end;
 } Logger;
 
-void watcher_log(Logger *logger, const char *message, ...);
+void watcher_log(const char *message, ...);
 
 int32_t platform_app_should_close();
 void platform_init();
@@ -27,15 +27,13 @@ void platform_init();
 // Process handling.
 
 struct Process_Handle;
-struct Logger;
 
 Process_Handle create_process_handle();
 void destroy_process_handle(Process_Handle *handle);
 char *separate_command_to_executable_and_args(const char *in, char *out_arg_list[], size_t arg_capacity);
 
-
-int32_t start_process(const char *command, Process_Handle *handle, Logger *logger);
-int32_t restart_process(const char *command, Process_Handle *handle, Logger *logger);
+int32_t start_process(const char *working_dir, const char *command, Process_Handle *handle, Logger *logger);
+int32_t restart_process(const char *working_dir, const char *command, Process_Handle *handle, Logger *logger);
 void terminate_process(Process_Handle *handle); // try to terminate the process whether it's alive or not.
 
 int  get_process_status(Process_Handle *handle, int *process_status);

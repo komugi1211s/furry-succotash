@@ -78,9 +78,9 @@ char *separate_command_to_executable_and_args(const char *in, char **out_arg_lis
     return executable_command;
 }
 
-int32_t start_process(const char *command, Process_Handle *handle, Logger *logger) {
+int32_t start_process(const char *working_dir, const char *command, Process_Handle *handle, Logger *logger) {
     // Create Argument list.  if (!create_pipe(handle)) {
-    //     watcher_log(logger, "Failed to create a pipe.");
+    //     watcher_log("Failed to create a pipe.");
     //     return 0;
     // }
 
@@ -90,13 +90,22 @@ int32_t start_process(const char *command, Process_Handle *handle, Logger *logge
     int err = errno;
 
     if (pid == -1) {
-        watcher_log(logger, "Failed to create a process via fork: errno %s", strerror(err));
+        watcher_log("Failed to create a process via fork: errno %s", strerror(err));
         free(exec_command);
         return 0;
     }
 
     // Child Process.
     if (pid == 0) {
+
+        int chresult = chdir(working_dir);
+        int cherr = errno;
+        if (chresult == -1) {
+            fprintf(stderr, "Failed to set a working directory. errno = %s\n", strerror(cherr));
+            sleep_ms(500);
+            exit(EXIT_FAILURE);
+        }
+
         // Set the process group to new distinct one so that
         // I can specify the entire group to kill the grandchildren process altogether.
         int process_group_set_result = setpgid(0, 0);
@@ -124,7 +133,7 @@ int32_t start_process(const char *command, Process_Handle *handle, Logger *logge
 
     handle->child_pid = pid;
     free(exec_command);
-    watcher_log(logger, "started a new process: pid = %d", handle->child_pid);
+    watcher_log("started a new process: pid = %d", handle->child_pid);
 
     return 1;
 }
@@ -162,9 +171,9 @@ void terminate_process(Process_Handle *handle) {
     handle->child_pid = -1;
 }
 
-int32_t restart_process(const char *command, Process_Handle *handle, Logger *logger) {
+int32_t restart_process(const char *working_dir, const char *command, Process_Handle *handle, Logger *logger) {
     terminate_process(handle);
-    return start_process(command, handle, logger);
+    return start_process(working_dir, command, handle, logger);
 }
 
 int get_process_status(Process_Handle *handle, int *process_status) {
@@ -423,7 +432,7 @@ uint64_t find_latest_modified_time(Logger *logger, char *filepath) {
     // Get file's information, returning on failure
     struct stat status;
     if (stat(filepath, &status) == -1) {
-        watcher_log(logger, "failed to load path by stat: %s, path: %s\n", strerror(errno), filepath);
+        watcher_log("failed to load path by stat: %s, path: %s\n", strerror(errno), filepath);
         return 0;
     }
 

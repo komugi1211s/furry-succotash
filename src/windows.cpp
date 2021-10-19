@@ -209,7 +209,7 @@ int32_t start_process(const char *command, Process_Handle *handle, Logger *logge
                                  &handle->procinfo);
 
     if (created == 0) {
-        watcher_log(logger, "Failed to run process: GetLastError() = %d", GetLastError());
+        watcher_log("Failed to run process: GetLastError() = %d", GetLastError());
         ZeroMemory(&handle->procinfo, sizeof(handle->procinfo));
         return 0;
     }   
@@ -377,7 +377,7 @@ uint64_t find_latest_modified_time(Logger *logger, char *filepath) {
     HANDLE handle = FindFirstFile(filepath, &data);
 
     if (handle == INVALID_HANDLE_VALUE) {
-        watcher_log(logger, "Failed to find a folder: attempt to open %s resulted in INVALID_HANDLE_VALUE", filepath);
+        watcher_log("Failed to find a folder: attempt to open %s resulted in INVALID_HANDLE_VALUE", filepath);
         return 0;
     }
 
