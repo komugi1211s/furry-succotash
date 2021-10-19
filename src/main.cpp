@@ -14,7 +14,7 @@
 #include <SDL2/SDL_opengl.h>
 #endif
 
-static int WINDOW_WIDTH  = 350;
+static int WINDOW_WIDTH  = 650;
 static int WINDOW_HEIGHT = 300;
 
 extern "C" {
@@ -68,7 +68,9 @@ void watcher_log(Logger *logger, const char *message, ...) {
     va_end(list);
 
     logger->logs_end = (logger->logs_end + 1) % LOG_BUFFER_BUCKET_SIZE;
-    if (logger->logs_end == logger->logs_begin) logger->logs_begin = (logger->logs_begin + 1) % LOG_BUFFER_BUCKET_SIZE;
+    if (logger->logs_end == logger->logs_begin) {
+        logger->logs_begin = (logger->logs_begin + 1) % LOG_BUFFER_BUCKET_SIZE;
+    }
 }
 
 char sdlk_to_microui_key(SDL_Keycode sym) {
@@ -245,13 +247,6 @@ int main(int argc, char **argv) {
     mu_init(ctx);
     ctx->text_width = text_width;
     ctx->text_height = text_height;
-
-    /* main loop */
-    strcat(succotash->directory, "./src");
-    strcat(succotash->command,   "./test_printing_process.exe");
-
-    to_full_paths(succotash->directory, sizeof(succotash->directory));
-    to_full_paths(succotash->command,   sizeof(succotash->command));
 
     succotash->handle             = create_process_handle();
     succotash->last_modified_time = find_latest_modified_time(&succotash->logger, (char *)succotash->directory);
