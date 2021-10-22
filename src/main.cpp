@@ -361,7 +361,7 @@ int main(int argc, char **argv) {
 
             // Read stdout.
             if (process_is_alive) {
-                size_t bytes_read;
+                size_t bytes_read = 0;
                 do {
                     if (stdout_buffer_used >= stdout_buffer_size) {
                         stdout_buffer_size *= 2;
@@ -382,10 +382,9 @@ int main(int argc, char **argv) {
                         break;
                     }
 
-                    printf("Reading this: %" PRIu64 "\n", bytes_read);
                     size_t current_ptr = stdout_buffer_used;
                     for (size_t i = stdout_buffer_used; i < stdout_buffer_used + bytes_read; ++i) {
-                        if (i == '\n') {
+                        if (stdout_buffer[i] == '\n') {
                             stdout_buffer[i] = '\0';
 
                             watcher_log(&stdout_buffer[current_ptr]);
@@ -395,8 +394,8 @@ int main(int argc, char **argv) {
 
                     if (current_ptr > stdout_buffer_used) {
                         size_t remaining_unprinted_bytes = (stdout_buffer_used + bytes_read) - current_ptr;
-                        memset(&stdout_buffer, 0, current_ptr);
-                        memmove(&stdout_buffer, &stdout_buffer[current_ptr], remaining_unprinted_bytes);
+                        memset(stdout_buffer, 0, current_ptr);
+                        memmove(stdout_buffer, &stdout_buffer[current_ptr], remaining_unprinted_bytes);
                         stdout_buffer_used = remaining_unprinted_bytes;
                     } else {
                         stdout_buffer_used += bytes_read;
@@ -445,7 +444,6 @@ int main(int argc, char **argv) {
         // handle->pid will be a valid ID once we start the process at the same frame.
         // otherwise the is_process_running at the top will return false because of ECHILD error, despite the process itself still running.
         render_gui(ctx);
-
         process_was_alive_previous_frame = process_is_alive;
     }  
     
