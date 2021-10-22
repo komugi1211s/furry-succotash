@@ -15,7 +15,7 @@
 
 struct Process_Handle {
     pid_t child_pid;
-    int reading_pipe[2];
+    FILE *output_pipe;
 };
 
 volatile sig_atomic_t force_stop = 0;
@@ -57,7 +57,6 @@ Process_Handle create_process_handle() {
 
 void destroy_process_handle(Process_Handle *handle) {
     terminate_process(handle);
-    close_pipe(handle);
 }
 
 char *separate_command_to_executable_and_args(const char *in, char **out_arg_list, size_t arg_capacity) {
@@ -79,25 +78,31 @@ char *separate_command_to_executable_and_args(const char *in, char **out_arg_lis
 }
 
 int32_t start_process(const char *working_dir, const char *command, Process_Handle *handle, Logger *logger) {
-    // Create Argument list.  if (!create_pipe(handle)) {
-    //     watcher_log("Failed to create a pipe.");
-    //     return 0;
-    // }
+    int stdout[2] = {0};
 
+    if (pipe(stdout) != 0) {
+        int err = errno;
+        watcher_log("failed to create a pipe: errno %s", strerror(err));
+        return 0;
+    }
+
+    // Create Argument list.
     char *arg_list[32] = {0};
     char *exec_command = separate_command_to_executable_and_args(command, arg_list, 32);
+
     pid_t pid = fork();
     int err = errno;
 
     if (pid == -1) {
         watcher_log("Failed to create a process via fork: errno %s", strerror(err));
+        close(stdout[0]);
+        close(stdout[1]);
         free(exec_command);
         return 0;
     }
 
     // Child Process.
     if (pid == 0) {
-
         int chresult = chdir(working_dir);
         int cherr = errno;
         if (chresult == -1) {
@@ -118,6 +123,11 @@ int32_t start_process(const char *working_dir, const char *command, Process_Hand
             exit(EXIT_FAILURE);
         }
 
+        // Setup the pipe.
+        close(stdout[0]);
+        dup2(stdout[1], STDERR_FILENO);
+        dup2(STDERR_FILENO, STDOUT_FILENO);
+
         execvp(exec_command, (char *const *)arg_list); // arg_list);
 
         // Failed to run a process. I shouldn't be here!
@@ -131,13 +141,15 @@ int32_t start_process(const char *working_dir, const char *command, Process_Hand
 
     // Parent process!
 
-    handle->child_pid = pid;
+    close(stdout[1]);
     free(exec_command);
-    watcher_log("started a new process: pid = %d", handle->child_pid);
+
+    handle->output_pipe = fdopen(stdout[0], "rb");
+    handle->child_pid   = pid;
+    watcher_log("started a new process: pid = %d", pid);
 
     return 1;
 }
-
 
 /*
  * Kills the child process if alive and releases the process handle.
@@ -148,32 +160,31 @@ void terminate_process(Process_Handle *handle) {
     int err = errno;
 
     if (kill_result == -1) {
- 
         // sanitize handle if the process is already dead and does not exist.
         if (err == ESRCH) {
-            handle->child_pid = -1;
-            return;
+            goto clear_handle;
         }
 
         fprintf(stderr, "Failed to kill a process. error: %d\n", err);
         exit(EXIT_FAILURE);
     }
 
-    int status;
-    int wait_result = waitpid(-handle->child_pid, &status, 0);
-    int werr = errno;
+    {
+        int status;
+        int wait_result = waitpid(-handle->child_pid, &status, 0);
+        int werr = errno;
 
-    if (wait_result == -1) {
-        fprintf(stderr, "Failed to wait a process. error: %d\n", werr);
-        exit(EXIT_FAILURE);
+        if (wait_result == -1) {
+            fprintf(stderr, "Failed to wait a process. error: %d\n", werr);
+            exit(EXIT_FAILURE);
+        }
     }
 
-    handle->child_pid = -1;
-}
+clear_handle:
+    fclose(handle->output_pipe);
 
-int32_t restart_process(const char *working_dir, const char *command, Process_Handle *handle, Logger *logger) {
-    terminate_process(handle);
-    return start_process(working_dir, command, handle, logger);
+    handle->child_pid = -1;
+    handle->output_pipe = NULL;
 }
 
 int get_process_status(Process_Handle *handle, int *process_status) {
@@ -269,149 +280,36 @@ int32_t to_full_paths(char *paths_buffer, size_t paths_buffer_size) {
     return 1;
 }
 
-
-// repeatedly read stdout from process.
-// should be used within the thread.
-
-/*
-typedef struct {
-    Process_Handle *handle;
-    Logger *logger;
-} stdout_task_thr_info;
-
-void handle_stdout_for_process(void *ptr) {
-    stdout_task_thr_info info = *(stdout_task_thr_info *)ptr;
-    delete (stdout_task_thr_info *)(ptr);
-
-    Process_Handle *handle = info.handle;
-    Logger *Logger = info.buffer;
-    handle->child_pid = -1;
-
-    return;
-
-    char message[1024] = {0};
-    size_t read_amount = 0;
-
-    ssize_t read_amount_or_error = read(handle->reading_pipe[0], &message, sizeof(message)-1);
-    if (read_amount_or_error < 0) {
-        printf("Failed to read: %s\n", strerror(errno));
-        return;
-    }
-
-    read_amount = (size_t) read_amount_or_error;
-
-    while (read_amount > 0) {
-        // Extend buffer accordingly.
-        while((Logger->used + read_amount) > Logger->capacity) {
-            char *new_ptr = (char *)realloc(Logger->buffer_ptr, Logger->capacity * 2);
-            assert(new_ptr && "Realloc failed, shouldn't continue.");
-
-            Logger->buffer_ptr = new_ptr;
-            Logger->capacity   = Logger->capacity * 2;
-        }
-
-        // Finding a Newline.
-        size_t found_newline_index = 0;
-
-        for (size_t index = 0; index < read_amount; ++index) {
-            if (message[index] == '\n' || message[index] == 0) {
-                found_newline_index = index;
-                break;
-            }
-        }
-
-        char *reading_ptr = message;
-
-        // Write into stdout if you've found a newline.
-        if (found_newline_index > 0) {
-            strncat(Logger->buffer_ptr, reading_ptr, found_newline_index + 1);
-            printf("[Logs] %s", Logger->buffer_ptr);
-            reading_ptr += found_newline_index;
-            read_amount -= found_newline_index;
-
-            memset(Logger->buffer_ptr, 0, Logger->capacity);
-            Logger->used = 0;
-        }
-
-        // Concatenate the rest.
-        strcat(Logger->buffer_ptr, reading_ptr);
-        Logger->used += read_amount;
-
-        memset(message, 0, sizeof(message));
-        read_amount_or_error = read(handle->reading_pipe[0], &message, sizeof(message)-1);
-        if (read_amount_or_error < 0) {
-            if (errno == EAGAIN) {
-                // expected when the result is empty.
-                return;
-            }
-            printf("Failed to read below: %s", strerror(errno));
-            return;
-        }
-        read_amount = (size_t) read_amount_or_error;
-    }
-}
-*/
-
-// Create pipe for given handle.
-// crashes on invalid handle.
-int create_pipe(Process_Handle *handle) {
-    assert(handle->child_pid == -1 && "Cannot create pipe for alive handle.");
-    const int PIPE_SUCCESS = 0;
-
-    if (pipe(handle->reading_pipe)) {
+size_t handle_stdout_for_process(Process_Handle *handle, char *buffer, size_t buffer_open) {
+    if (!handle->output_pipe) {
         return 0;
     }
 
-    /*
-    Let's make it blocking and use mutex instead!
-    if (fcntl(handle->reading_pipe[0], F_SETFL, O_NONBLOCK)) {
-        handle->valid = 0;
-        close(handle->reading_pipe[0]);
-        close(handle->reading_pipe[1]);
+    int32_t file_no = fileno(handle->output_pipe);
+    fd_set sets;
+    FD_ZERO(&sets);
+    FD_SET(file_no, &sets);
+    struct timeval timeout = {0};
+    timeout.tv_usec = 100;
+    int ready = select(file_no + 1, &sets, 0, 0, &timeout);
+    int rerr = errno;
+
+    if (ready == -1) {
+        fprintf(stderr, "Failed to select a file discriptor: errno = %s\n", strerror(rerr));
+        exit(EXIT_FAILURE);
+    }
+
+    if (ready == 0 || !(FD_ISSET(file_no, &sets))) {
         return 0;
     }
-    */
 
-    return 1;
-}
-
-// Close given pipe completely.
-void close_pipe(Process_Handle *handle) {
-    if (handle->reading_pipe[0] != 0) {
-        close(handle->reading_pipe[0]);
-        handle->reading_pipe[0] = 0;
-    }
-    if (handle->reading_pipe[1] != 0) {
-        close(handle->reading_pipe[1]);
-        handle->reading_pipe[1] = 0;
+    ssize_t bytes_read = read(file_no, buffer, buffer_open - 1);
+    if (bytes_read < 0) {
+        return 0;
+    } else {
+        return (size_t)bytes_read;
     }
 }
-
-// ====================================
-// Threading.
-
-
-/*
-void *stdout_task(void *arg) {
-    printf("begin\n");
-    // handle_stdout_for_process(arg);
-    printf("end\n");
-
-    pthread_exit(NULL);
-    return NULL;
-}
-
-Thread_Handle start_stdout_thread(Process_Handle *handle, Logger *logger) {
-    Thread_Handle thread = {0};
-
-    stdout_task_thr_info *i = new stdout_task_thr_info;
-    i->handle = handle;
-    i->buffer = buffer;
-
-    pthread_create(&thread.inner, NULL, stdout_task, (void *)i); // problem!
-    return thread;
-}
-*/
 
 // ====================================
 // Files.

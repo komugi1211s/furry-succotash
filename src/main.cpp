@@ -43,8 +43,6 @@ extern "C" {
 #include "unix.cpp"
 #endif
 
-
-
 struct Succotash {
     int32_t running;
     uint64_t last_modified_time;
@@ -59,6 +57,9 @@ struct Succotash {
     Process_Handle handle;
 };
 
+/*
+ * This will replace the "Succotash" structure later.
+ * */
 struct Task {
     uint64_t last_modified_time;
     int32_t  should_be_running;
@@ -200,7 +201,7 @@ void process_gui(Succotash *succotash, mu_Context *ctx) {
             succotash->last_modified_time = 0;
         }
 
-        int32_t watching_folder       = succotash->should_process_running && !succotash->folder_is_invalid;
+        int32_t watching_folder = succotash->should_process_running && !succotash->folder_is_invalid;
         mu_checkbox_ex(ctx, "Running",  &process_is_running,    MU_OPT_NOINTERACT);
         mu_checkbox_ex(ctx, "Watching", &watching_folder, MU_OPT_NOINTERACT);
 
@@ -298,6 +299,10 @@ int main(int argc, char **argv) {
     mu_Context *ctx = (mu_Context *)malloc(sizeof(mu_Context));
     memset(succotash, 0, sizeof(Succotash));
 
+    size_t stdout_buffer_size = 12 * 1024 * 1024;
+    size_t stdout_buffer_used = 0;
+    char  *stdout_buffer      = (char *)malloc(stdout_buffer_size);
+
     mu_init(ctx);
     ctx->text_width = text_width;
     ctx->text_height = text_height;
@@ -345,7 +350,6 @@ int main(int argc, char **argv) {
         process_event(succotash, ctx);
         process_gui(succotash, ctx);
 
-        // handle_stdout_for_process(&succotash->handle, NULL);
         if (succotash->should_process_running) {
             int32_t process_running_trigger = 0;
 
@@ -353,6 +357,51 @@ int main(int argc, char **argv) {
                 watcher_log("Folder %s became invalid. cannot start/restart the process", succotash->watch_directory);
                 succotash->should_process_running = 0;
                 continue;
+            }
+
+            // Read stdout.
+            if (process_is_alive) {
+                size_t bytes_read;
+                do {
+                    if (stdout_buffer_used >= stdout_buffer_size) {
+                        stdout_buffer_size *= 2;
+                        char *new_buffer = (char *)realloc(stdout_buffer, stdout_buffer_size);
+                        if (!new_buffer) {
+                            fprintf(stderr, "failed to reallocate a buffer.\n");
+                            succotash->running = 0;
+                            break;
+                        }
+
+                        stdout_buffer = new_buffer;
+                    }
+
+                    bytes_read = handle_stdout_for_process(&succotash->handle,
+                                                           stdout_buffer,
+                                                           stdout_buffer_size - stdout_buffer_used);
+                    if (bytes_read == 0) {
+                        break;
+                    }
+
+                    printf("Reading this: %" PRIu64 "\n", bytes_read);
+                    size_t current_ptr = stdout_buffer_used;
+                    for (size_t i = stdout_buffer_used; i < stdout_buffer_used + bytes_read; ++i) {
+                        if (i == '\n') {
+                            stdout_buffer[i] = '\0';
+
+                            watcher_log(&stdout_buffer[current_ptr]);
+                            current_ptr = i + 1;
+                        }
+                    }
+
+                    if (current_ptr > stdout_buffer_used) {
+                        size_t remaining_unprinted_bytes = (stdout_buffer_used + bytes_read) - current_ptr;
+                        memset(&stdout_buffer, 0, current_ptr);
+                        memmove(&stdout_buffer, &stdout_buffer[current_ptr], remaining_unprinted_bytes);
+                        stdout_buffer_used = remaining_unprinted_bytes;
+                    } else {
+                        stdout_buffer_used += bytes_read;
+                    }
+                } while(bytes_read != 0);
             }
 
             uint64_t modified_time = find_latest_modified_time(&succotash->logger,
@@ -377,12 +426,12 @@ int main(int argc, char **argv) {
             // Restart / start process depending on the current situation.
             if (process_running_trigger) {
                 if (process_is_alive) {
-                    restart_process(succotash->work_directory, succotash->command, &succotash->handle, &succotash->logger);
-                } else {
-                    if(!start_process(succotash->work_directory, succotash->command, &succotash->handle, &succotash->logger)) {
-                        watcher_log("Failed to run a process. specify the correct executables and try again.");
-                        succotash->should_process_running = 0;
-                    }
+                    terminate_process(&succotash->handle);
+                }
+
+                if(!start_process(succotash->work_directory, succotash->command, &succotash->handle, &succotash->logger)) {
+                    watcher_log("Failed to run a process. specify the correct executables and try again.");
+                    succotash->should_process_running = 0;
                 }
             }
         } else {
@@ -404,5 +453,6 @@ int main(int argc, char **argv) {
     destroy_process_handle(&succotash->handle);
     free(ctx);
     free(succotash);
+    free(stdout_buffer);
     return 0;
 }

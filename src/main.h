@@ -12,11 +12,11 @@ typedef struct Logger Logger;
 #define LOG_BUFFER_LINE_SIZE   2048
 #define LOG_BUFFER_BUCKET_SIZE 256
 
-typedef struct Logger {
+struct Logger {
     char   logs[LOG_BUFFER_LINE_SIZE][LOG_BUFFER_BUCKET_SIZE];
     size_t logs_begin;
     size_t logs_end;
-} Logger;
+};
 
 void watcher_log(const char *message, ...);
 
@@ -33,7 +33,6 @@ void destroy_process_handle(Process_Handle *handle);
 char *separate_command_to_executable_and_args(const char *in, char *out_arg_list[], size_t arg_capacity);
 
 int32_t start_process(const char *working_dir, const char *command, Process_Handle *handle, Logger *logger);
-int32_t restart_process(const char *working_dir, const char *command, Process_Handle *handle, Logger *logger);
 void terminate_process(Process_Handle *handle); // try to terminate the process whether it's alive or not.
 
 int  get_process_status(Process_Handle *handle, int *process_status);
@@ -48,8 +47,8 @@ enum {
     PROCESS_MAX,
 };
 
+size_t handle_stdout_for_process(Process_Handle *handle, char *buffer, size_t buffer_open);
 
-/* Code below are functions that are currently confirmed to be required in Unix. */
 int create_pipe(Process_Handle *handle);
 void close_pipe(Process_Handle *handle);
 
